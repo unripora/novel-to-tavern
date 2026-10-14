@@ -14,7 +14,7 @@ import * as worldbook from './worldbook.js';
 import * as wbByChapter from './worldbook-by-chapter.js';
 import * as timeline from './timeline.js';
 import { $, state, escapeHtml, downloadText, stopRun, saveProducts } from './ui-context.js';
-import * as persist from './persist.js';
+import * as persistMod from './persist.js';
 
 export function renderWorldTab(box) {
     const nodes = timeline.getTimeline().nodes || [];
@@ -190,13 +190,13 @@ async function runChapterWorldbook() {
 
     try {
         // 已完成篇章索引（用于增量展示与补跑）
-        const idx = await persist.loadWbIndex();
+        const idx = await persistMod.loadWbIndex();
         const doneChapters = (idx.chapters || []).slice();
         const groups = await wbByChapter.generateSplitWorldbook(nodes, {
             signal, logEl: 'ce_wb_log', options, fullText: full,
             // 补跑模式下不重跑总本
             onGeneralDone: rerunSel ? undefined : async (general) => {
-                await persist.saveChapterBook('_whole', general);
+                await persistMod.saveChapterBook('_whole', general);
                 state.wbGroups = { general, chapters: state.wbGroups?.chapters || [] };
                 renderGroups(state.wbGroups);
                 saveProducts();
@@ -204,11 +204,11 @@ async function runChapterWorldbook() {
             onProgress: (i, total, name) => flash('ce_wb_msg', `生成 ${i + 1}/${total}：${name}…`, false, { persist: true }),
             // 某篇完成：独立落盘 + 即时进预览 + 更新索引
             onChapterDone: async (item, i, total) => {
-                await persist.saveChapterBook(item.name, item.entries);
+                await persistMod.saveChapterBook(item.name, item.entries);
                 const di = doneChapters.findIndex((c) => c.name === item.name);
                 const rec = { name: item.name, count: item.entries.length };
                 if (di >= 0) doneChapters[di] = rec; else doneChapters.push(rec);
-                await persist.saveWbIndex(doneChapters);
+                await persistMod.saveWbIndex(doneChapters);
                 const cur = state.wbGroups || { general: [], chapters: [] };
                 const rest = cur.chapters.filter((c) => c.name !== item.name);
                 state.wbGroups = { general: cur.general, chapters: [...rest, item] };
@@ -277,11 +277,11 @@ function groupRowHtml(name, entries) {
 async function doLoadIndex() {
     flash('ce_wb_msg3', '载入中…', false, { persist: true });
     try {
-        const idx = await persist.loadWbIndex();
-        const whole = await persist.loadChapterBook('_whole');
+        const idx = await persistMod.loadWbIndex();
+        const whole = await persistMod.loadChapterBook('_whole');
         const chapters = [];
         for (const c of idx.chapters || []) {
-            const book = await persist.loadChapterBook(c.name);
+            const book = await persistMod.loadChapterBook(c.name);
             if (book) chapters.push({ name: book.name || c.name, entries: book.entries || [] });
         }
         if (!chapters.length && !whole) { flash('ce_wb_msg3', '未发现已落盘的篇章本', true); return; }
@@ -329,7 +329,7 @@ async function runWorldbook() {
     if ($('ce_wb_t_extract').checked) {
         tasks.push(['提取条目', () => runWithResume('extract', novelName, (st) => worldbook.wbExtractCore({
             entries: state.wbEntries, state: st,
-            onSegment: (s) => persist.saveProgress('extract:' + novelName, s),
+            onSegment: (s) => persistMod.saveProgress('extract:' + novelName, s),
         }), { entries: state.wbEntries })]);
     }
     if ($('ce_wb_t_bg').checked) tasks.push(['共享背景', () => worldbook.wbBgCore({})]);
@@ -337,7 +337,7 @@ async function runWorldbook() {
     if ($('ce_wb_t_plot').checked) {
         tasks.push(['剧情分段', () => runWithResume('plot', novelName, (st) => worldbook.wbPlotCore({
             entries: state.wbEntries, state: st,
-            onSegment: (s) => persist.saveProgress('plot:' + novelName, s),
+            onSegment: (s) => persistMod.saveProgress('plot:' + novelName, s),
         }), { entries: state.wbEntries })]);
     }
     if ($('ce_wb_t_chars').checked) tasks.push(['人物列表', () => worldbook.wbConstantEntry({ kind: 'chars' })]);
@@ -379,13 +379,13 @@ async function runWorldbook() {
  */
 async function runWithResume(kind, novelName, run) {
     const taskKey = kind + ':' + novelName;
-    let st = await persist.loadProgress(taskKey);
+    let st = await persistMod.loadProgress(taskKey);
     const res = await run(st);
     // 内核返回 { entries, state, done }：done=true 或 state=null 表示跑完
     if (res && res.done) {
-        await persist.clearProgress(taskKey);
+        await persistMod.clearProgress(taskKey);
     } else if (res && res.state) {
-        await persist.saveProgress(taskKey, res.state);
+        await persistMod.saveProgress(taskKey, res.state);
     }
     return res;
 }
