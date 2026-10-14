@@ -6,6 +6,7 @@ import { toast, flash, logTo, clearLog } from './util.js';
 import { settings, persist } from './store.js';
 import * as novel from './novel.js';
 import * as worldbook from './worldbook.js';
+import * as wbByChapter from './worldbook-by-chapter.js';
 import * as extras from './extras.js';
 import * as timeline from './timeline.js';
 import { $, state, escapeHtml, copyText, downloadText, stopRun } from './ui-context.js';
@@ -153,14 +154,25 @@ export function renderWorldTab(box) {
                 </div>
             </div>
             <div class="ce-section">
-                <label class="ce-label">世界书解耦（按篇章拆分，避免跨篇章 OOC）</label>
-                <p class="ce-faint">跨篇章出场的角色与全局规则 → 通用本；单篇章的 NPC／反派／设定／剧情 → 对应篇章本。需先在「时间线」页建立篇章。</p>
+                <label class="ce-label">按篇章生成（一总多分，推荐）</label>
+                <p class="ce-faint">
+                    按「时间线」篇章分别生成：总本 = 全局世界观 + 角色总表 + 剧情大纲（3 条常驻）；
+                    各篇章本 = 在该篇章正文范围内提取的势力/地点/设定/剧情（内容按篇章真实切分，不混线）。
+                </p>
                 <div class="ce-rowline">
-                    <button type="button" class="menu_button" id="ce_wb_classify">归类（通用 / 各篇章）</button>
-                    <button type="button" class="menu_button" id="ce_wb_split_write">解耦写入酒馆（多本）</button>
+                    <button type="button" class="menu_button" id="ce_wb_chapter_gen">按篇章生成</button>
+                    <button type="button" class="menu_button" id="ce_wb_chapter_write">解耦写入酒馆（多本）</button>
                     <span id="ce_wb_msg3" class="ce-msg"></span>
                 </div>
                 <div id="ce_wb_groups"></div>
+            </div>
+            <div class="ce-section">
+                <label class="ce-label">（可选）事后归类现有条目</label>
+                <p class="ce-faint">已有条目想按篇章拆分时用：让 AI 判断每条属于通用本还是某篇章本。需先在「时间线」页建立篇章。</p>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_wb_classify">归类现有条目</button>
+                    <span id="ce_wb_msg4" class="ce-msg"></span>
+                </div>
             </div>
         </div>`;
 
@@ -178,24 +190,57 @@ export function renderWorldTab(box) {
         flash('ce_wb_msg2', '已清空');
     });
     $('ce_wb_classify').addEventListener('click', doClassify);
-    $('ce_wb_split_write').addEventListener('click', doSplitWrite);
+    $('ce_wb_chapter_gen').addEventListener('click', doChapterGen);
+    $('ce_wb_chapter_write').addEventListener('click', doSplitWrite);
+}
+
+/** 按篇章生成世界书（一总多分） */
+async function doChapterGen() {
+    const nodes = timeline.getTimeline().nodes || [];
+    if (!nodes.length) { flash('ce_wb_msg3', '请先在「时间线」页建立篇章', true); return; }
+    if (!novel.getNovel().trim()) { flash('ce_wb_msg3', '请先导入小说', true); return; }
+    if (state.running) { flash('ce_wb_msg3', '正在生成，请稍候', true); return; }
+
+    settings().nsfw = $('ce_wb_nsfw').checked;
+    persist();
+
+    state.running = true;
+    state.controller = new AbortController();
+    const signal = state.controller.signal;
+    clearLog('ce_wb_log');
+    flash('ce_wb_msg3', '按篇章生成中…');
+
+    try {
+        const groups = await wbByChapter.generateSplitWorldbook(nodes, {
+            signal, logEl: 'ce_wb_log',
+            onProgress: (i, total, name) => flash('ce_wb_msg3', `生成 ${i + 1}/${total}：${name}…`),
+        });
+        state.wbGroups = groups;
+        renderGroups(groups);
+        flash('ce_wb_msg3', '生成完成，请检查后「解耦写入酒馆（多本）」');
+    } catch (e) {
+        flash('ce_wb_msg3', '生成失败：' + e.message, true);
+        logTo('ce_wb_log', '生成失败：' + e.message, 'e');
+    } finally {
+        state.running = false;
+    }
 }
 
 /** 归类：把条目分到通用本 / 各篇章本 */
 async function doClassify() {
-    if (!state.wbEntries.length) { flash('ce_wb_msg3', '没有条目可归类', true); return; }
+    if (!state.wbEntries.length) { flash('ce_wb_msg4', '没有条目可归类', true); return; }
     const nodes = timeline.getTimeline().nodes || [];
-    if (!nodes.length) { flash('ce_wb_msg3', '请先在「时间线」页建立篇章', true); return; }
-    flash('ce_wb_msg3', '归类中…');
+    if (!nodes.length) { flash('ce_wb_msg4', '请先在「时间线」页建立篇章', true); return; }
+    flash('ce_wb_msg4', '归类中…');
     try {
         const groups = await worldbook.classifyEntries(state.wbEntries, nodes, {
             onLog: (m, c) => logTo('ce_wb_log', m, c),
         });
         state.wbGroups = groups;
         renderGroups(groups);
-        flash('ce_wb_msg3', '归类完成');
+        flash('ce_wb_msg4', '归类完成');
     } catch (e) {
-        flash('ce_wb_msg3', '归类失败：' + e.message, true);
+        flash('ce_wb_msg4', '归类失败：' + e.message, true);
     }
 }
 
