@@ -36,22 +36,31 @@ export const DEFAULT_SETTINGS = Object.freeze({
     curTpl: '',          // 当前模板名
     history: [],         // 历史记录（最多 30）
     timeline: null,      // 时间线（章节轴）：{ nodes: [], locked: false }
+    curNovel: '',        // 当前正文对应的记录名（刷新后自动恢复用）
 });
 
 /** 内存兜底（非酒馆环境或 localforage 不可用时使用） */
 const mem = {};
 
-/** 是否可用酒馆存储 */
+/** 是否可用酒馆存储（懒加载，多级回落） */
 let _lf = null;
 function lf() {
     if (_lf) return _lf;
-    try {
-        const { libs } = ctx() || {};
-        if (libs?.localforage) {
-            _lf = libs.localforage.createInstance({ name: 'card-extractor' });
+    // ① 全局 SillyTavern.libs.localforage（官方文档写法，最可靠）
+    // ② getContext().libs.localforage（部分版本挂在 context 上）
+    const candidates = [
+        globalThis.SillyTavern?.libs?.localforage,
+        ctx()?.libs?.localforage,
+    ];
+    for (const l of candidates) {
+        if (l && typeof l.createInstance === 'function') {
+            try {
+                _lf = l.createInstance({ name: 'card-extractor' });
+                return _lf;
+            } catch (e) { /* 换下一个候选 */ }
         }
-    } catch (e) { _lf = null; }
-    return _lf;
+    }
+    return null;
 }
 
 /**
@@ -76,6 +85,11 @@ export function settings() {
 export function persist() {
     const c = ctx();
     if (c?.saveSettingsDebounced) c.saveSettingsDebounced();
+}
+
+/** 是否具备持久存储（localforage 可用） */
+export function persistentAvailable() {
+    return !!lf();
 }
 
 /** 小说正文存储（大文本走 localforage） */

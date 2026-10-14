@@ -264,6 +264,18 @@
 
 .ce-faint { opacity: .55; font-size: 12px; }
 
+/* 存储不可用警告 */
+.ce-warn {
+    font-size: 12px;
+    color: #e0b34a;
+    background: rgba(224, 179, 74, .1);
+    border: 1px solid rgba(224, 179, 74, .35);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin: 10px 0;
+    line-height: 1.5;
+}
+
 /* 分区 */
 .ce-section {
     margin: 14px 0;

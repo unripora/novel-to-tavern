@@ -5,7 +5,7 @@
  * 正文存 localforage（见 store.js）。
  */
 
-import { novelStore } from './store.js';
+import { novelStore, settings, persist } from './store.js';
 
 const READ_CHUNK = 4 * 1024 * 1024;   // 每次读取 4MB
 const PREVIEW_LIMIT = 200000;          // 预览截断长度
@@ -15,6 +15,16 @@ let novelText = '';
 
 export function getNovel() {
     return novelText;
+}
+
+/** 当前正文对应的记录名（用于刷新后自动恢复） */
+export function getCurrentRecord() {
+    return settings().curNovel || '';
+}
+
+function setCurrentRecord(name) {
+    settings().curNovel = name || '';
+    persist();
 }
 
 export function previewOf(text) {
@@ -83,13 +93,28 @@ export async function readNovelFile(f, onProgress) {
 
     const text = parts.join('');
     setNovel(text);
-    return { text, enc: dec };
+    // 导入即自动落盘：用文件名（去扩展名）作为记录名，刷新后可自动恢复
+    const recName = (f.name || '').replace(/\.[^.]+$/, '').trim() || ('导入_' + Date.now());
+    try { await saveNovelRecord(recName); } catch (e) { /* 存储不可用时不阻断导入 */ }
+    return { text, enc: dec, record: recName };
+}
+
+/** 启动时恢复上次使用的正文（若存在） */
+export async function restoreLastNovel() {
+    const name = getCurrentRecord();
+    if (!name) return '';
+    try {
+        const text = await novelStore.load(name);
+        if (text) setNovel(text);
+        return text;
+    } catch (e) { return ''; }
 }
 
 /** 保存当前正文到记录 */
 export async function saveNovelRecord(name) {
     if (!name) throw new Error('请填写小说名称');
     await novelStore.save(name, novelText);
+    setCurrentRecord(name);
     return name;
 }
 
@@ -97,12 +122,14 @@ export async function saveNovelRecord(name) {
 export async function loadNovelRecord(name) {
     const text = await novelStore.load(name);
     setNovel(text);
+    setCurrentRecord(name);
     return text;
 }
 
-/** 删除记录 */
+/** 删除记录（若删的是当前记录，清空当前记录名） */
 export async function deleteNovelRecord(name) {
     await novelStore.del(name);
+    if (getCurrentRecord() === name) setCurrentRecord('');
 }
 
 /** 列出全部记录名 */
@@ -118,5 +145,6 @@ export function statOf(text) {
 
 export default {
     getNovel, previewOf, setNovel, readNovelFile,
+    getCurrentRecord, restoreLastNovel,
     saveNovelRecord, loadNovelRecord, deleteNovelRecord, listNovelRecords, statOf,
 };

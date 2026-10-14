@@ -11,6 +11,7 @@
 
 import { MODULE_NAME, settings, persist } from './src/store.js';
 import { ctx, inTavern } from './src/st-bridge.js';
+import { restoreLastNovel } from './src/novel.js';
 
 /** 绑定设置面板输入项 */
 function bindSettings() {
@@ -207,6 +208,11 @@ jQuery(async () => {
 
         bindSettings();
         bindModal();
+
+        // 恢复上次导入的正文（刷新/重启后不丢）
+        restoreLastNovel().then((text) => {
+            if (text) console.log('[card-extractor] 已恢复上次正文 ' + text.length + ' 字');
+        }).catch(() => {});
 
         console.log('[card-extractor] 初始化完成', inTavern() ? '(酒馆环境)' : '(非酒馆环境)');
     } catch (e) {

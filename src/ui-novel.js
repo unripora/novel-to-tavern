@@ -4,6 +4,7 @@
 
 import { flash } from './util.js';
 import * as novel from './novel.js';
+import { persistentAvailable } from './store.js';
 import { $, state } from './ui-context.js';
 
 export function renderNovelTab(box) {
@@ -29,13 +30,23 @@ export function renderNovelTab(box) {
                 <button type="button" class="menu_button" id="ce_novel_save">保存当前</button>
                 <button type="button" class="menu_button" id="ce_novel_del">删除</button>
             </div>
-            <p class="ce-tip">提示：正文保存在酒馆扩展存储中，刷新不丢失。也可把文件直接拖到上方文本框。</p>
+            <p class="ce-tip">提示：导入后会自动保存到酒馆扩展存储（IndexedDB），刷新/重启不丢失。也可把文件直接拖到上方文本框。</p>
+            <p class="ce-warn" id="ce_store_warn" style="display:none">
+                ⚠ 未检测到酒馆持久存储（localforage），当前数据仅存内存，刷新会丢失。
+            </p>
         </div>`;
 
     const ta = $('ce_novel_text');
     const dz = $('ce_dropzone');
     ta.value = novel.previewOf(novel.getNovel());
     updateNovelStat();
+    const cur = novel.getCurrentRecord();
+    if (cur) flash('ce_novel_msg', '已恢复上次导入：' + cur);
+    // 持久存储不可用时给出明确警告（否则用户无感知）
+    if (!persistentAvailable()) {
+        const w = $('ce_store_warn');
+        if (w) w.style.display = 'block';
+    }
 
     // 显式按钮触发隐藏的 file input（原生 input 在酒馆主题下不可见）
     $('ce_pick_btn').addEventListener('click', () => $('ce_file').click());
@@ -103,7 +114,7 @@ async function importFile(f) {
     try {
         flash('ce_novel_msg', '读取中…');
         $('ce_load_prog').style.display = 'block';
-        const { text, enc } = await novel.readNovelFile(f, (pct, label) => {
+        const { text, enc, record } = await novel.readNovelFile(f, (pct, label) => {
             $('ce_load_bar').style.width = pct + '%';
             const el = $('ce_novel_msg');
             if (el) el.textContent = label || '';
@@ -111,7 +122,8 @@ async function importFile(f) {
         $('ce_novel_text').value = novel.previewOf(text);
         updateNovelStat();
         $('ce_load_prog').style.display = 'none';
-        flash('ce_novel_msg', '已导入（编码 ' + enc + '）');
+        flash('ce_novel_msg', '已导入（编码 ' + enc + '），已自动存为记录「' + record + '」');
+        refreshNovelList(record);
     } catch (e) {
         $('ce_load_prog').style.display = 'none';
         flash('ce_novel_msg', '读取失败：' + e.message, true);
@@ -123,7 +135,7 @@ function updateNovelStat() {
     if (el) el.textContent = novel.getNovel().length.toLocaleString() + ' 字';
 }
 
-async function refreshNovelList() {
+async function refreshNovelList(selectName) {
     const sel = $('ce_novel_sel');
     if (!sel) return;
     const keys = await novel.listNovelRecords();
@@ -139,4 +151,6 @@ async function refreshNovelList() {
         o.value = k; o.textContent = k;
         sel.appendChild(o);
     });
+    const want = selectName || novel.getCurrentRecord();
+    if (want && keys.includes(want)) sel.value = want;
 }
