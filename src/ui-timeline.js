@@ -5,6 +5,7 @@
 import { flash, logTo, clearLog } from './util.js';
 import * as novel from './novel.js';
 import * as timeline from './timeline.js';
+import { settings, persist } from './store.js';
 import { $, rerender } from './ui-context.js';
 
 export function renderTimelineTab(box) {
@@ -38,9 +39,12 @@ export function renderTimelineTab(box) {
                 <label class="ce-label">按故事梗概划分（粘贴梗概，自动识别篇章结构）</label>
                 <textarea id="ce_tl_synopsis" class="text_pole ce-synopsis" rows="6"
                     placeholder="粘贴作品梗概，例如：&#10;## 1. 艾恩葛朗特篇&#10;2022 年万人被困死亡游戏 SAO……&#10;## 2. 妖精之舞篇&#10;SAO 通关，亚丝娜仍被困在 ALO……"></textarea>
+                <label class="ce-label">参考文档（可选：作品目录 / 设定资料 / 篇章简介）</label>
+                <textarea id="ce_tl_refdoc" class="text_pole ce-synopsis" rows="4"
+                    placeholder="可粘贴该作品的目录、卷名列表、设定资料等，供 AI 更准确地定位各篇章边界（顺序仍以梗概为准）。"></textarea>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_tl_syn_run">梗概划分</button>
-                    <span class="ce-faint">先按篇名关键词在正文中模糊检索（含「第X卷」标志行），未命中的交给 AI 重检索</span>
+                    <span class="ce-faint">篇章顺序以梗概为准；先模糊检索篇名与卷标志行，未命中的交给 AI 结合参考文档细化边界</span>
                 </div>
             </div>
             <div class="ce-log" id="ce_tl_log"></div>
@@ -48,6 +52,7 @@ export function renderTimelineTab(box) {
         </div>`;
 
     bindRowEvents(textLen);
+    bindSynopsisDraft();
 
     $('ce_tl_divide').addEventListener('click', doDivide);
     $('ce_tl_ev_run').addEventListener('click', doDivideByEvents);
@@ -62,6 +67,21 @@ export function renderTimelineTab(box) {
         timeline.setLocked(!timeline.isLocked());
         rerender('timeline');
     });
+}
+
+/** 梗概 / 参考文档草稿：回填 + 自动保存（切换 Tab 或刷新不丢） */
+function bindSynopsisDraft() {
+    const syn = $('ce_tl_synopsis');
+    const ref = $('ce_tl_refdoc');
+    const s = settings();
+    if (syn) {
+        syn.value = s.tlSynopsis || '';
+        syn.addEventListener('input', () => { settings().tlSynopsis = syn.value; persist(); });
+    }
+    if (ref) {
+        ref.value = s.tlRefDoc || '';
+        ref.addEventListener('input', () => { settings().tlRefDoc = ref.value; persist(); });
+    }
 }
 
 function nodeRowHtml(n, i, textLen) {
@@ -134,6 +154,7 @@ function doDivideByEvents() {
 /** 按故事梗概划分 */
 async function doDivideBySynopsis() {
     const raw = $('ce_tl_synopsis').value.trim();
+    const refDoc = $('ce_tl_refdoc') ? $('ce_tl_refdoc').value.trim() : '';
     if (!raw) { flash('ce_tl_msg', '请先粘贴故事梗概', true); return; }
     if (!novel.getNovel().trim()) { flash('ce_tl_msg', '请先导入小说', true); return; }
     const btn = $('ce_tl_syn_run');
@@ -143,6 +164,7 @@ async function doDivideBySynopsis() {
     try {
         const { nodes, missed } = await timeline.divideBySynopsis(raw, {
             onLog: (m, c) => logTo('ce_tl_log', m, c),
+            refDoc,
         });
         timeline.saveTimeline({ nodes, locked: false });
         flash('ce_tl_msg', `已按梗概划分 ${nodes.length} 个篇章` + (missed.length ? `，${missed.length} 个由 AI/均分估算` : ''), missed.length > 0);

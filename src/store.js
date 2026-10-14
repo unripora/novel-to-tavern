@@ -37,6 +37,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     history: [],         // 历史记录（最多 30）
     timeline: null,      // 时间线（章节轴）：{ nodes: [], locked: false }
     curNovel: '',        // 当前正文对应的记录名（刷新后自动恢复用）
+    tlSynopsis: '',      // 时间线：梗概划分草稿（篇名+概述）
+    tlRefDoc: '',        // 时间线：参考文档草稿
 });
 
 /** 内存兜底（非酒馆环境或 localforage 不可用时使用） */

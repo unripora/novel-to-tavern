@@ -5,15 +5,28 @@
  * 底层改为酒馆 generateRaw（见 st-bridge.js）。
  */
 
-import { aiRaw } from './st-bridge.js';
-import { stripThink } from './util.js';
+import { aiRaw, looksTruncated } from './st-bridge.js';
+import { stripThink, logTo } from './util.js';
+import { settings } from './store.js';
 
-/** 最近一次生成的 finish_reason（用于判断是否被截断） */
+/** 最近一次生成的 finish_reason（用于判断是否被截断，酒馆未必提供） */
 let lastFinish = '';
 
-/** 是否发生截断 */
+/** 是否发生截断（finish_reason 精确判断） */
 export function wasTruncated() {
     return /length|max_?tokens/i.test(lastFinish || '');
+}
+
+/**
+ * 综合判断是否被截断：
+ * ① finish_reason 明确为 length/max_tokens（若酒馆提供）
+ * ② 启发式：结尾结构未闭合（YAML/JSON/代码块/括号）
+ * @param {string} text
+ * @param {number} maxTokens
+ */
+export function detectTruncated(text, maxTokens) {
+    if (wasTruncated()) return true;
+    return looksTruncated(text, maxTokens);
 }
 
 /** 判断错误是否为用户主动中止 */
@@ -90,24 +103,27 @@ export async function generate(prompt, {
         }
         full += part;
         onText && onText(full);
-        if (!wasTruncated()) break;
-        if (round < maxCont && logEl && onWait) {
-            // 续写提示由调用方决定是否记录
-        }
+        // 综合判断是否截断：本轮的 finish/长度 + 全文结构未闭合
+        // 注意：长度判据只看本轮输出（续写后 full 必然更长，用 full 会误判）
+        if (!detectTruncated(part, settings().maxTokens) && !looksTruncated(full)) break;
+        if (round >= maxCont) break;
+        if (logEl) logTo(logEl, (label ? label + ' ' : '') + '检测到截断，自动续写（第 ' + (round + 1) + ' 次）…', 'w');
     }
     return full;
 }
 
 /** 构造续写用的 prompt（在 Chat 数组或字符串间兼容） */
 function appendContinue(prompt, full) {
+    const rule = '上面的内容被截断了，请**从中断处直接接着写**：' +
+        '不要重复已经写过的内容，不要重新开头，不要加任何解释或说明。' +
+        '如果中断处在 YAML 结构内部，请**严格保持原有缩进层级**继续，把未写完的字段补完，并确保整体结构闭合。';
     if (Array.isArray(prompt)) {
         return prompt.concat([
             { role: 'assistant', content: stripThink(full) },
-            { role: 'user', content: '上面的内容被截断了，请从中断处直接接着写，不要重复已经写过的内容，也不要重新开头或加任何说明。' },
+            { role: 'user', content: rule },
         ]);
     }
-    return String(prompt) + '\n\n' + stripThink(full)
-        + '\n\n上面的内容被截断了，请从中断处直接接着写，不要重复已经写过的内容，也不要重新开头或加任何说明。';
+    return String(prompt) + '\n\n' + stripThink(full) + '\n\n' + rule;
 }
 
-export default { chat, chatStream, generate, wasTruncated, isAbort };
+export default { chat, chatStream, generate, wasTruncated, detectTruncated, isAbort };

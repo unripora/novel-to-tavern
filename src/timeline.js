@@ -291,26 +291,29 @@ export function fuzzyFind(text, kw) {
  * 按「故事梗概」划分篇章
  *
  * 流程：
- *   1. 解析梗概得到篇章清单（篇名 + 概述）
- *   2. 模糊检索：从篇名抽关键词，在正文中模糊定位（精确包含 → 第X卷标志行 → 反向包含）
- *   3. AI 重检索：仍未命中的篇章，请 AI 依据梗概与抽样正文给出「正文中可检索的关键词」，
- *      再用关键词回到正文模糊检索（比直接要占比更精确）
+ *   1. 解析梗概得到篇章清单（篇名 + 概述）——**顺序以梗概为准，不由 AI 决定**
+ *   2. 模糊检索：从篇名抽关键词，在正文中模糊定位（卷标志行 → 反向包含 → 精确包含）
+ *   3. AI 细化边界：仍未命中的篇章，把「梗概 + 参考文档 + 抽样正文」交给 AI，
+ *      请它给出「正文中可检索的关键词」，再回正文模糊检索（比直接要占比更精确）
  *   4. 按梗概原顺序切分；仅对「完全无位置」的篇章按序插值兜底，不再打乱顺序
  *
  * @param {string} raw 梗概原文
- * @param {{signal?:AbortSignal, onLog?:(msg:string,cls?:string)=>void}} [opts]
+ * @param {{signal?:AbortSignal, onLog?:(msg:string,cls?:string)=>void, refDoc?:string}} [opts]
+ *        refDoc：本地参考文档（作品资料 / 目录 / 设定），用于辅助 AI 细化边界
  * @returns {Promise<{nodes:Array, missed:string[], refined:boolean}>}
  */
-export async function divideBySynopsis(raw, { signal, onLog } = {}) {
+export async function divideBySynopsis(raw, { signal, onLog, refDoc } = {}) {
     const text = getNovel();
     if (!text) throw new Error('请先导入小说');
     if (!String(raw || '').trim()) throw new Error('请先粘贴故事梗概');
 
     const log = (m, c) => { if (onLog) onLog(m, c); else logTo('ce_tl_log', m, c); };
     const textLen = text.length;
+    const ref = String(refDoc || '').trim();
     const items = parseSynopsis(raw);
     if (!items.length) throw new Error('未能从梗概中解析出篇章，请检查格式（每篇以标题或「1.」开头）');
-    log('梗概解析出 ' + items.length + ' 个篇章，开始模糊检索篇名…');
+    log('梗概解析出 ' + items.length + ' 个篇章（顺序以梗概为准），开始模糊检索篇名…' +
+        (ref ? '（已附带参考文档 ' + ref.length + ' 字）' : ''));
 
     // ① 模糊检索（篇名 → 关键词 → 正文定位）
     const missed = [];
@@ -322,20 +325,23 @@ export async function divideBySynopsis(raw, { signal, onLog } = {}) {
             log('篇章「' + it.name + '」命中「' + hit.hit + '」于 ' + (hit.pos / textLen * 100).toFixed(1) + '%', 'g');
         } else {
             missed.push(it.name);
-            log('篇章「' + it.name + '」未命中，将交由 AI 重检索', 'e');
+            log('篇章「' + it.name + '」未命中，将交由 AI 细化边界', 'e');
         }
     }
 
-    // ② AI 重检索：让 AI 给出「正文中可检索的关键词」，再回正文模糊检索
+    // ② AI 细化边界：让 AI 给出「正文中可检索的关键词」，再回正文模糊检索
     let refined = false;
     if (missed.length) {
         try {
-            log('提交 AI 重检索未命中的篇章…');
+            log('提交 AI 细化未命中篇章的边界…');
             const sample = sampleForTimeline(text);
             const prompt = buildSynopsisPrompt(items);
+            const userMsg = prompt +
+                (ref ? ('\n\n=== 参考文档（作品资料，供定位参考）===\n' + ref) : '') +
+                '\n\n=== 小说内容（抽样）===\n' + sample;
             const rawAi = await generate([
                 { role: 'system', content: '你是精通叙事结构与文本检索的文学分析师。' },
-                { role: 'user', content: prompt + '\n\n=== 小说内容（抽样）===\n' + sample },
+                { role: 'user', content: userMsg },
             ], { signal, useStream: false, maxCont: 2 });
 
             const arr = extractJsonArray(stripThink(stripFence(rawAi)));
@@ -353,7 +359,7 @@ export async function divideBySynopsis(raw, { signal, onLog } = {}) {
                 refined = true;
             }
         } catch (e) {
-            log('AI 重检索失败（' + e.message + '），未命中的篇章将按顺序插值', 'e');
+            log('AI 边界细化失败（' + e.message + '），未命中的篇章将按顺序插值', 'e');
         }
     }
 
@@ -405,17 +411,17 @@ function fillMissingPositions(items, textLen) {
     }
 }
 
-/** 梗概划分的 AI 重检索提示词（要求返回可检索关键词） */
+/** 梗概划分的 AI 边界细化提示词（顺序已由梗概锁定，只求可检索关键词） */
 function buildSynopsisPrompt(items) {
     const list = items.map((it, i) =>
         (i + 1) + '. 「' + it.name + '」：' + (it.summary || '（无概述）').replace(/\n+/g, ' ')
     ).join('\n');
-    return '下面给出这部小说的**篇章清单**（按剧情先后排列），以及小说的抽样内容。\n' +
-        '请为每个篇章给出一个**能在这部小说正文里直接检索到的关键词**（例如卷名、篇章标题、专有名词），' +
-        '用于在正文中定位该篇章的起始位置。\n' +
+    return '下面给出这部小说的**篇章清单**（顺序已确定，请勿改动顺序）以及小说抽样内容。\n' +
+        '你的任务**不是重新划分篇章**，而是为每个篇章给出一个**能在这部小说正文里直接检索到的关键词**' +
+        '（例如卷名、篇章标题、专有名词），用于在正文中定位该篇章的起始位置。\n' +
         '关键词要简短、唯一，优先取正文中原样出现的词（如卷名「妖精之舞」）。若无法确定，留空字符串。\n\n' +
-        '篇章清单：\n' + list + '\n\n' +
-        '只输出 JSON 数组，元素顺序与篇章清单一致，形如：\n' +
+        '篇章清单（顺序固定）：\n' + list + '\n\n' +
+        '只输出 JSON 数组，元素顺序与篇章清单**完全一致**，形如：\n' +
         '[{"keyword":"艾恩葛朗特"},{"keyword":"妖精之舞"},{"keyword":""}]\n' +
         '不要输出解释、不要代码块。';
 }
