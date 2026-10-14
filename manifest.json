@@ -1,0 +1,11 @@
+{
+  "display_name": "角色卡提取工具",
+  "loading_order": 100,
+  "js": "index.js",
+  "css": "style.css",
+  "author": "AreaSongWcc",
+  "version": "1.0.0",
+  "homePage": "",
+  "auto_update": false,
+  "minimum_client_version": "1.12.0"
+}

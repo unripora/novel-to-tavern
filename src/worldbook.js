@@ -1,0 +1,505 @@
+/**
+ * worldbook.js —— 世界书（Lorebook / World Info）逻辑
+ *
+ * 迁移自原 index.html 的世界书逻辑，含两部分：
+ * 1. 生成：6 类任务的 AI 生成（提取条目 / 共享背景 / 配角群像 / 剧情分段 / 常驻条目）+ 预览/JSON/回读等纯数据处理。
+ * 2. 写入酒馆：writeWorldbookToTavern 把内部条目写入酒馆世界书文件（新建或合并）。
+ * AI 调用统一走 generate.js；DOM 相关交由上层 UI，本模块只做纯逻辑与酒馆写入。
+ */
+
+import { ctx } from './st-bridge.js';
+import { getNovel } from './novel.js';
+import { settings } from './store.js';
+import { sampleForStyle, getCharacters } from './scan.js';
+import { generate, chat, isAbort } from './generate.js';
+import { stripFence, stripThink, extractJsonArray, logTo, uniq } from './util.js';
+
+/** 世界书条目格式说明（迁移自 prompts.js） */
+import { WB_FMT as _WB_FMT } from './prompts.js';
+export { WB_FMT } from './prompts.js';
+const WB_FMT = _WB_FMT;
+
+/** 睡眠：用于分段请求之间的小间隔，避免触发限流 */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ===== 一、纯数据处理：user 替换 / 预览 / JSON / 回读 ===== */
+
+/** 让 user 替换书中某角色：参数化传入（不直接读 DOM），返回被替换的角色名 */
+function replaceNameOf(opt) {
+    if (!opt || !opt.enabled) return '';
+    return String(opt.name || '').trim();
+}
+
+/** 替换单个文本（标题 / 内容）中的角色名 → {{user}} */
+export function wbSub(s, rn) {
+    return (rn && s) ? String(s).split(rn).join('{{user}}') : s;
+}
+
+/** 从关键词里剔除被替换的角色名 */
+export function wbSubKeys(keys, rn) {
+    return rn ? (keys || []).filter((k) => k !== rn) : (keys || []);
+}
+
+/** 生成人可读的世界书预览文本（带推荐设置） */
+export function buildWbPreview(entries, userReplace = {}) {
+    const rn = replaceNameOf(userReplace);
+    const lines = [];
+    lines.push('# 世界书条目预览（共 ' + entries.length + ' 条）');
+    lines.push('# 通用推荐：位置＝角色定义之前 · 深度 4 · 顺序 100（酒馆默认即可）');
+    lines.push('');
+    entries.forEach((e, i) => {
+        const mode = e.constant ? '常驻（蓝灯）— 始终注入，适合核心世界观' : '关键词触发（绿灯）— 被提到时才注入';
+        const keys = wbSubKeys(e.keys, rn);
+        lines.push('========== ' + (i + 1) + '. ' + wbSub(e.title, rn) + '　[' + e.category + '] ==========');
+        lines.push('触发关键词: ' + (keys.length ? keys.join('、') : '（无，建议手动补）'));
+        lines.push('推荐模式: ' + mode);
+        lines.push('内容:');
+        lines.push(wbSub(e.content, rn) || '（原文未提及）');
+        lines.push('');
+    });
+    return lines.join('\n');
+}
+
+/** 生成可导入酒馆的世界书 JSON（字符串） */
+export function buildWbJson(entries, userReplace = {}) {
+    const rn = replaceNameOf(userReplace);
+    const out = { entries: {} };
+    entries.forEach((e, i) => {
+        out.entries[String(i)] = {
+            uid: i,
+            key: wbSubKeys(e.keys, rn),
+            keysecondary: [],
+            comment: wbSub(e.title, rn),
+            content: '【' + wbSub(e.title, rn) + '】' + (e.category ? ('（' + e.category + '）') : '') + '\n' + wbSub(e.content, rn),
+            constant: e.constant,
+            selective: !e.constant,
+            selectiveLogic: 0,
+            order: 100,
+            position: 0,            // 0 = 角色定义之前
+            depth: 4,
+            probability: 100,
+            useProbability: true,
+            disable: false,
+            addMemo: true,
+            excludeRecursion: false,
+            group: '',
+            groupOverride: false,
+            scanDepth: null,
+            caseSensitive: null,
+            matchWholeWords: null,
+            automationId: '',
+            role: null,
+            vectorized: false,
+            displayIndex: i,
+        };
+    });
+    return JSON.stringify(out, null, 2);
+}
+
+/** 把预览文本回读成结构化条目（供下载/打包/写入酒馆用） */
+export function parseWbPreview(text) {
+    const lines = String(text).split(/\r?\n/);
+    const entries = [];
+    let cur = null;
+    let mode = null;
+    const headerRe = /^={4,}\s*\d+\.\s*(.+?)\s*={4,}\s*$/;
+    for (const line of lines) {
+        const hm = line.match(headerRe);
+        if (hm) {
+            if (cur) entries.push(cur);
+            const head = hm[1].trim();
+            let category = '设定';
+            let title = head;
+            // 贪心吃前缀，只认结尾的 [分类]，且分类内不含括号
+            const cm = head.match(/^(.+)[　\s]+[\[［]([^\[\]［］]+)[\]］]$/);
+            if (cm && cm[1].trim()) { title = cm[1].trim(); category = cm[2].trim(); }
+            if (!title) title = head;   // 兜底：绝不让标题为空（否则条目会被过滤丢失）
+            cur = { title, category, keys: [], content: '', constant: false };
+            mode = null;
+            continue;
+        }
+        if (!cur) continue;
+        if (/^触发关键词\s*[:：]/.test(line)) {
+            const v = line.replace(/^触发关键词\s*[:：]\s*/, '').trim();
+            const isNone = !v || /^[（(]?无/.test(v) || v.indexOf('建议手动补') >= 0;   // 识别「（无，建议手动补）」占位符
+            cur.keys = isNone ? [] : v.split(/[、,，]/).map((s) => s.trim()).filter(Boolean);
+            mode = null; continue;
+        }
+        if (/^推荐模式\s*[:：]/.test(line)) { cur.constant = /常驻|蓝灯|constant/i.test(line); mode = null; continue; }
+        if (/^内容\s*[:：]/.test(line)) {
+            mode = 'content';
+            const rest = line.replace(/^内容\s*[:：]\s*/, '');
+            if (rest.trim()) cur.content += rest + '\n';
+            continue;
+        }
+        if (mode === 'content') cur.content += line + '\n';
+    }
+    if (cur) entries.push(cur);
+    entries.forEach((e) => { e.content = e.content.trim(); });
+    return entries.filter((e) => e.title);
+}
+
+/** 同步回条目：把用户手动编辑过的预览文本解析回条目数组（原 syncWbFromPreview，去掉 confirm/DOM）。 */
+export function syncWbFromPreview(previewText, entries, onShrink) {
+    const txt = String(previewText || '');
+    if (!txt.trim()) return entries;
+    if (entries.length && txt.trim() === buildWbPreview(entries).trim()) return entries;   // 没动过
+    const parsed = parseWbPreview(txt);
+    if (!parsed.length) { logTo('wbLog', '预览框内容无法解析成条目（格式需保持「===== 序号. 标题 =====」那套），导出将沿用上次的结果', 'e'); return entries; }
+    // 防丢失：解析结果比原来少很多时，多半是手滑删坏了预览，交由上层确认，避免静默丢条目
+    if (entries.length >= 5 && parsed.length < entries.length * 0.6 && !(onShrink ? onShrink(parsed, entries) : true)) return entries;
+    return parsed;
+}
+
+/* ===== 二、生成：6 类世界书任务 ===== */
+
+/** 从设置读取分块大小（原 els.chunkSize） */
+function chunkSizeOf() { return Math.max(10000, Number(settings().chunkSize) || 40000); }
+/** 从设置读取扫描上限段数（原 els.scanCap） */
+function scanCapOf() { return Math.max(1, Number(settings().scanCap) || 40); }
+/** 构造 Chat 消息数组（对齐原 userMsgs：有系统前缀时插入 system 消息） */
+function userMsgs(prompt, sys) {
+    return sys ? [{ role: 'system', content: sys }, { role: 'user', content: prompt }] : [{ role: 'user', content: prompt }];
+}
+
+/** NSFW 提示行（原 $("wbNsfw").checked） */
+function nsfwLineWorld() {
+    return settings().nsfw ? '可包含成人向的世界观/设定条目，同样只依据原文，不编造。' : '不要提取成人 / 性相关内容。';
+}
+
+/** 【任务1】提取世界书条目：分段逐段提取世界观/势力/地点/设定/历史/物品（原 wbExtractCore，支持断点续跑） */
+export async function wbExtractCore({ signal, entries = [], state = null, onProgress } = {}) {
+    const text = getNovel().trim();
+    const size = chunkSizeOf();
+    const totalChunks = Math.ceil(text.length / size);
+    const chunkAt = (i) => text.slice(i * size, (i + 1) * size);
+    const resuming = state && state.len === text.length && state.next < state.cap;
+    let cap, map, startI;
+    if (resuming) {
+        cap = state.cap; map = state.map; startI = state.next;
+        logTo('wbLog', '从第 ' + (startI + 1) + '/' + cap + ' 段继续提取…');
+    } else {
+        cap = Math.min(totalChunks, scanCapOf());
+        map = new Map(); startI = 0;
+        state = { len: text.length, size, cap, next: 0, map };
+        if (totalChunks > cap) logTo('wbLog', '小说较长（共 ' + totalChunks + ' 段），仅提取前 ' + cap + ' 段。', 'e');
+        logTo('wbLog', '共 ' + cap + ' 段，开始提取…');
+    }
+    const nsfw = nsfwLineWorld();
+    for (let i = startI; i < cap; i++) {
+        if (signal && signal.aborted) break;
+        const chunk = chunkAt(i);
+        if (onProgress) onProgress(i, cap);
+        if (i > startI) await sleep(400);
+        const prompt =
+            '下面是小说的一段。提取其中的「世界观 / 设定」类信息，做成世界书条目。\n' +
+            '关注：世界观背景、势力/组织、地点、种族/体系设定、重要概念或规则、历史事件、关键物品等。\n' +
+            '不要提取具体角色的个人档案（那属于角色卡）；群体性的身份/种族/阵营设定可以。\n' +
+            nsfw + '\n' +
+            '输出 JSON 数组，每个元素：\n' +
+            '{"category":"分类(世界观/势力/地点/设定/历史/物品 之一)","title":"条目标题","keys":["触发关键词，用原文里会出现的名称/术语，2~5个"],"content":"该设定的说明，依据原文、简洁准确、不编造","constant":true 或 false}\n' +
+            'constant：整体世界观/总背景 → true（建议常驻）；具体的势力/地点/术语/物品 → false（关键词触发）。\n' +
+            '只输出 JSON 数组，不要代码块、不要解释。该段没有明确设定就输出 []。\n\n文本：\n' + chunk;
+        let raw = '';
+        const onWait = (n, code, w) => logTo('wbLog', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
+        try { raw = await chat(userMsgs(prompt), { signal, onWait }); } catch (err) {
+            if (isAbort(err, signal)) { logTo('wbLog', '已停止', 'e'); break; }
+            logTo('wbLog', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
+            state.next = i + 1; continue;
+        }
+        const arr = extractJsonArray(raw);
+        if (!Array.isArray(arr) || !arr.length) {
+            const snip = String(raw).trim().replace(/\s+/g, ' ').slice(0, 90);
+            logTo('wbLog', '第' + (i + 1) + '段解析失败，模型返回：' + (snip ? '「' + snip + '」' : '（空，可能被安全过滤挡了）'), 'e');
+            state.next = i + 1; continue;
+        }
+        for (const e of arr) {
+            if (!e || !e.title) continue;
+            const title = String(e.title).trim();
+            if (!title) continue;
+            const keys = Array.isArray(e.keys) ? e.keys.map((k) => String(k).trim()).filter(Boolean) : [];
+            const content = String(e.content || '').trim();
+            if (map.has(title)) {
+                const ex = map.get(title);
+                for (const k of keys) if (!ex.keys.includes(k)) ex.keys.push(k);
+                if (content.length > ex.content.length) ex.content = content;
+                ex.constant = ex.constant || !!e.constant;
+            } else {
+                map.set(title, { category: String(e.category || '设定').trim(), title, keys, content, constant: !!e.constant });
+            }
+        }
+        state.next = i + 1;
+        logTo('wbLog', '第' + (i + 1) + '段 → 累计 ' + map.size + ' 条', 'g');
+    }
+    const merged = [...map.values()];
+    const done = state.next >= cap;
+    return { entries: merged, state: done ? null : state, done };
+}
+
+/** 【任务2】共享背景 / 世界大纲：抽取多角色共享的时代背景，做成一条常驻条目（原 wbBgCore） */
+export async function wbBgCore({ signal, onText } = {}) {
+    const text = getNovel().trim();
+    const sample = sampleForStyle(text);
+    const prompt =
+        '通读下面这部小说（节选），总结所有角色共享的时代背景、世界大环境、社会规则、集体经历与公共设定——不要写任何单一角色的个人档案。\n' +
+        '浓缩成一段适合做「常驻世界书条目」的背景大纲，让 AI 始终了解故事发生的大框架，从而角色卡里不必重复这些共同信息。\n' +
+        '只依据原文，简洁准确，不编造。直接输出这段背景大纲正文，不要标题、不要解释、不要代码块。\n\n=== 小说节选 ===\n' + sample;
+    const raw = await generate(userMsgs(prompt), { signal, useStream: !!settings().useStream, onText, maxCont: settings().autoCont ? 5 : 0, logEl: 'wbLog', label: '共享背景' });
+    const content = stripFence(stripThink(raw)).trim();
+    if (!content) { logTo('wbLog', '共享背景：没提取到内容', 'e'); return null; }
+    return { category: '共享背景', title: '共享背景 / 世界大纲', keys: [], content, constant: true };
+}
+
+/**
+ * 【任务3】配角群像：mode='each' 逐个配角各一条 | 其它合成一条群像合集（迁移自原 wbMinorCore）。
+ */
+export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, maxTokens } = {}) {
+    const characters = getCharacters();
+    if (!characters.length) { logTo('wbLog', '配角：请先扫描/添加角色，跳过', 'e'); return []; }
+    const maxT = Math.max(4000, Number(maxTokens) || 4000);
+    const sample = sampleForStyle(getNovel().trim());
+    const capN = Math.max(1, Number(cap) || 20);
+    const list = characters.map((c) => '· ' + c.name + (c.aliases && c.aliases.length ? ('（' + c.aliases.join('、') + '）') : '') + (c.role ? ('：' + c.role) : '')).join('\n');
+    const stream = !!settings().useStream;
+    const cont = settings().autoCont ? 5 : 0;
+    if (mode === 'each') {
+        // 每个配角单独一条绿灯条目
+        const prompt =
+            '下面是这部小说的角色清单和节选。请为其中的**配角**逐个生成世界书条目（主角/核心角色略过，他们单独出卡）。\n' +
+            '从配角里挑最重要的，**最多 ' + capN + ' 个**。每个配角一条，写清身份、性格、地位、与主角及彼此的关系，有戏份的尽量详细。\n' +
+            '只依据原文、不编造。输出 JSON 数组 [{"name":"配角名","keys":["触发关键词2~4个"],"content":"介绍"}]，只输出 JSON，不要代码块、不要解释。\n\n' +
+            '角色清单：\n' + list + '\n\n=== 小说节选 ===\n' + sample;
+        const raw = await generate(userMsgs(prompt), { maxTokens: Math.max(maxT, 12000), useStream: stream, signal, onText, maxCont: cont, logEl: 'wbLog', label: '逐个配角' });
+        const arr = extractJsonArray(stripFence(stripThink(raw)));
+        if (!Array.isArray(arr) || !arr.length) { logTo('wbLog', '逐个配角：没解析出条目', 'e'); return []; }
+        const out = [];
+        for (const e of arr) {
+            if (!e || !e.name || !e.content) continue;
+            const nm = String(e.name).trim();
+            const keys = Array.isArray(e.keys) ? e.keys.map((k) => String(k).trim()).filter(Boolean) : [];
+            if (!keys.includes(nm)) keys.unshift(nm);
+            out.push({ category: '配角', title: '配角·' + nm, keys, content: String(e.content).trim(), constant: false });
+        }
+        return out;
+    }
+    // 合成一条群像
+    const prompt =
+        '下面是这部小说的角色清单和节选。请把其中的**配角**归纳成一条「群像合集」世界书条目。\n' +
+        '主角 / 核心角色请略过（他们会单独出卡）。从配角里挑出最重要的，**最多收录 ' + capN + ' 个**（按重要性取舍，超出的舍去）。\n' +
+        '写法分层：真正跑龙套、出场极少的，可以一两句带过；**其余有戏份的配角，每人至少 100 字**，写清身份、性格、地位、与主角及彼此的关系——他们是这个世界里活生生的人，不是工具人，别糊弄。\n' +
+        '只依据原文、不编造，原文没写的就不写。用「· 名字：介绍」的形式，直接输出正文，不要解释、不要代码块。\n\n' +
+        '角色清单：\n' + list + '\n\n=== 小说节选 ===\n' + sample;
+    const raw = await generate(userMsgs(prompt), { maxTokens: maxT, useStream: stream, signal, onText, maxCont: cont, logEl: 'wbLog', label: '配角群像' });
+    const content = stripFence(stripThink(raw)).trim();
+    if (!content) { logTo('wbLog', '配角群像：没归纳出内容', 'e'); return []; }
+    const keys = [];
+    characters.forEach((c) => { keys.push(c.name); (c.aliases || []).forEach((a) => keys.push(a)); });
+    return [{ category: '人物', title: '配角群像合集', keys: uniq(keys).slice(0, 80), content, constant: false }];
+}
+
+/** 【任务4】剧情分段：每阶段/副本一条绿灯条目（≥300字）。迁移自原 wbPlotCore；支持断点续跑。 */
+export async function wbPlotCore({ signal, entries = [], state = null, onProgress } = {}) {
+    const text = getNovel().trim();
+    const size = Math.max(50000, Number(settings().chunkSize) || 40000);
+    const totalChunks = Math.ceil(text.length / size);
+    const chunkAt = (i) => text.slice(i * size, (i + 1) * size);
+    const cap = Math.min(totalChunks, scanCapOf());
+    const resuming = state && state.len === text.length && state.cap === cap && state.next < cap;
+    const startI = resuming ? state.next : 0;
+    if (resuming) logTo('wbLog', '剧情分段：从第 ' + (startI + 1) + '/' + cap + ' 段继续…');
+    else { state = { len: text.length, cap, next: 0 }; logTo('wbLog', '剧情分段：共 ' + cap + ' 段，开始…'); }
+    const nsfw = settings().nsfw ? '可包含成人向剧情。' : '不必回避剧情，但不要展开露骨性描写。';
+    let addedTotal = 0;
+    for (let i = startI; i < cap; i++) {
+        if (signal && signal.aborted) break;
+        const chunk = chunkAt(i);
+        if (onProgress) onProgress(i, cap);
+        if (i > startI) await sleep(400);
+        const prompt =
+            '下面是小说按顺序的第 ' + (i + 1) + '/' + cap + ' 段。请把这段的剧情按「阶段 / 副本」切分并逐段总结。\n' +
+            '每个阶段一条，包含：\n' +
+            '- title：阶段 / 副本的名称\n' +
+            '- keys：触发关键词（该阶段会被提到的名称、地点、副本名等，2~5个）\n' +
+            '- content：该阶段的剧情总结，**不少于 300 字**，必须包含【重要出场角色、事件的前因后果、重要道具、时间线】，**不可遗漏任何剧情和伏笔**。\n' +
+            nsfw + '\n' +
+            '只依据原文、不编造。输出 JSON 数组 [{"title":"","keys":[],"content":""}]，只输出 JSON，不要代码块、不要解释。该段无实质剧情就输出 []。\n\n文本：\n' + chunk;
+        let raw = '';
+        const onWait = (n, code, w) => logTo('wbLog', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
+        try { raw = await chat(userMsgs(prompt), { signal, onWait }); } catch (err) {
+            if (isAbort(err, signal)) { logTo('wbLog', '已停止', 'e'); break; }
+            logTo('wbLog', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
+            state.next = i + 1; continue;
+        }
+        const arr = extractJsonArray(raw);
+        if (!Array.isArray(arr)) {
+            const snip = String(raw).trim().replace(/\s+/g, ' ').slice(0, 90);
+            logTo('wbLog', '第' + (i + 1) + '段解析失败，模型返回：' + (snip ? '「' + snip + '」' : '（空，多半被安全过滤挡了，或 max_tokens 被思考用光）'), 'e');
+            state.next = i + 1; continue;
+        }
+        // 即时写入，停了也保留已生成的
+        for (const e of arr) {
+            if (!e || !e.title || !e.content) continue;
+            const rawTitle = String(e.title).trim();
+            const keys = Array.isArray(e.keys) ? e.keys.map((k) => String(k).trim()).filter(Boolean) : [];
+            if (!keys.includes(rawTitle)) keys.unshift(rawTitle);
+            const entry = { category: '剧情', title: '剧情·' + rawTitle, keys, content: String(e.content).trim(), constant: false };
+            const idx = entries.findIndex((x) => x.title === entry.title);
+            if (idx >= 0) entries[idx] = entry; else entries.push(entry);
+            addedTotal++;
+        }
+        state.next = i + 1;
+        logTo('wbLog', '第' + (i + 1) + '段 → 剧情条目累计 ' + addedTotal, 'g');
+    }
+    const done = state.next >= cap;
+    if (done) logTo('wbLog', '剧情分段完成，新增 ' + addedTotal + ' 条（共 ' + entries.length + ' 条）', addedTotal ? 'g' : 'e');
+    return { entries, state: done ? null : state, done, added: addedTotal };
+}
+
+/** 【任务5/6】常驻条目（蓝灯）：kind='chars' 人物列表 | 'plot' 剧情大纲。迁移自原 wbConstantEntry。 */
+export async function wbConstantEntry({ signal, onText, kind = 'chars', maxTokens } = {}) {
+    const characters = getCharacters();
+    const maxT = Math.max(6000, Number(maxTokens) || 4000);
+    const sample = sampleForStyle(getNovel().trim());
+    const stream = !!settings().useStream;
+    const cont = settings().autoCont ? 5 : 0;
+    let prompt, title;
+    if (kind === 'chars') {
+        title = '人物列表';
+        const list = characters.length ? ('已知角色：\n' + characters.map((c) => '· ' + c.name).join('\n') + '\n\n') : '';
+        prompt = '下面是小说节选' + (characters.length ? '和已知角色清单' : '') + '。请生成一份**人物列表**，作为始终注入的常驻设定：把主要人物逐个列出，每人一行到两行，标明身份、与主角关系、核心性格。只依据原文、不编造。直接输出列表正文，不要解释、不要代码块。\n\n' + list + '=== 小说节选 ===\n' + sample;
+    } else {
+        title = '剧情大纲';
+        prompt = '下面是小说节选。请生成一份**剧情大纲**，作为始终注入的常驻设定：按时间顺序概述主线走向与关键转折（几段即可），让 AI 始终了解故事全貌。只依据原文、不编造。直接输出大纲正文，不要解释、不要代码块。\n\n=== 小说节选 ===\n' + sample;
+    }
+    const raw = await generate(userMsgs(prompt), { maxTokens: maxT, useStream: stream, signal, onText, maxCont: cont, logEl: 'wbLog', label: title });
+    const content = stripFence(stripThink(raw)).trim();
+    if (!content) {
+        const snip = String(raw).trim().replace(/\s+/g, ' ').slice(0, 90);
+        logTo('wbLog', title + '：没生成内容。模型返回：' + (snip ? '「' + snip + '」' : '（空，多半被安全过滤挡了，或 max_tokens 被思考用光）'), 'e');
+        return null;
+    }
+    return { category: '总纲', title, keys: [], content, constant: true };   // 蓝灯常驻
+}
+
+/* ===== 三、写入酒馆世界书 ===== */
+
+/** uid：时间戳 + 随机数，避免与酒馆已有条目撞号 */
+function genUid() { return Date.now() + Math.floor(Math.random() * 100000); }
+
+/** 把内部条目转换为酒馆 World Info 条目结构（保留 key/comment/content/constant 等核心字段） */
+export function toTavernEntry(e, userReplace = {}, idx = 0) {
+    const rn = replaceNameOf(userReplace);
+    return {
+        uid: genUid() + idx,
+        key: wbSubKeys(e.keys, rn),
+        keysecondary: [],
+        comment: wbSub(e.title, rn) || '',
+        content: wbSub(e.content, rn) || '',
+        constant: !!e.constant,
+        selective: true,
+        order: 100,
+        position: 0,             // 0 = 角色定义之前
+        disable: false,
+    };
+}
+
+/** 规范化一个酒馆世界书数据对象，保证 entries 存在 */
+function normalizeWorldInfo(data) {
+    const out = (data && typeof data === 'object') ? data : {};
+    if (!out.entries || typeof out.entries !== 'object') out.entries = {};
+    return out;
+}
+
+/** 遍历世界书 entries（键值对形式，值即条目对象） */
+function eachTavernEntry(data, fn) {
+    Object.values(normalizeWorldInfo(data).entries).forEach((entry) => { if (entry && typeof entry === 'object') fn(entry); });
+}
+
+/** 取当前角色绑定的世界书名 */
+export function boundWorldbookName() {
+    const c = ctx();
+    if (!c) return '';
+    try {
+        const ch = (c.characters || [])[c.characterId];
+        if (!ch) return '';
+        return ch.world || ch.data?.extensions?.world || '';
+    } catch (e) { return ''; }
+}
+
+/** 判断两内部条目是否冲突（标题相同，或关键词有交集） */
+function isConflict(a, b) {
+    const ta = String(a.title || '').trim();
+    const tb = String(b.title || '').trim();
+    if (ta && tb && ta === tb) return true;
+    const ka = (a.keys || []).filter(Boolean);
+    const kb = (b.keys || []).filter(Boolean);
+    return ka.some((k) => kb.includes(k));
+}
+
+/**
+ * 把世界书条目写入酒馆。mode='new' 新建独立文件（同名则合并）；mode='append' 读取当前角色绑定世界书并合并。
+ * @returns {Promise<{ok:boolean, bookName:string, count:number, conflicts:Array, message:string}>}
+ */
+export async function writeWorldbookToTavern(bookName, entries, mode = 'new', opts = {}) {
+    const c = ctx();
+    if (!c || typeof c.loadWorldInfo !== 'function' || typeof c.saveWorldInfo !== 'function') {
+        return { ok: false, bookName: bookName || '', count: 0, conflicts: [], message: '当前环境不支持世界书写入（缺少 loadWorldInfo/saveWorldInfo）' };
+    }
+    const userReplace = opts.userReplace || {};
+    const list = Array.isArray(entries) ? entries : [];
+    if (!list.length) return { ok: false, bookName: bookName || '', count: 0, conflicts: [], message: '没有条目可写入' };
+
+    // 决定目标世界书名
+    let name = String(bookName || '').trim();
+    if (mode === 'append' && !name) name = boundWorldbookName();
+    if (mode === 'append' && !name) return { ok: false, bookName: '', count: 0, conflicts: [], message: '未取到当前角色绑定的世界书，请显式指定世界书名' };
+    if (!name) name = '世界书';
+
+    // 读取已有世界书（不存在则视为空）
+    let data = {};
+    try { data = normalizeWorldInfo(await c.loadWorldInfo(name)); } catch (e) { data = normalizeWorldInfo({}); }
+
+    // 冲突检测：与已存在条目按标题/关键词比对（不静默覆盖）
+    const conflicts = [];
+    eachTavernEntry(data, (te) => {
+        const ex = { title: te.comment || '', keys: Array.isArray(te.key) ? te.key : (te.key ? [te.key] : []) };
+        for (const e of list) { if (isConflict(e, ex)) { conflicts.push({ title: e.title, existing: ex.title || e.title }); break; } }
+    });
+
+    // 追加到 entries（保留酒馆原有条目），uid 顺序续排
+    const entriesObj = data.entries;
+    let maxUid = 0;
+    Object.values(entriesObj).forEach((te) => { if (te && typeof te.uid === 'number') maxUid = Math.max(maxUid, te.uid); });
+    let added = 0;
+    list.forEach((e, i) => {
+        const te = toTavernEntry(e, userReplace, i);
+        te.uid = maxUid + 1 + i;
+        entriesObj[String(te.uid)] = te;
+        added++;
+    });
+
+    // 保存（第三个参数 true：立即刷新/触发世界书更新）
+    try { await c.saveWorldInfo(name, data, true); } catch (e) {
+        return { ok: false, bookName: name, count: 0, conflicts, message: '保存世界书失败：' + e.message };
+    }
+
+    const msg = '已写入世界书「' + name + '」：新增 ' + added + ' 条' + (conflicts.length ? ('，其中 ' + conflicts.length + ' 条与已有条目关键词/标题重复，请检查是否覆盖') : '');
+    return { ok: true, bookName: name, count: added, conflicts, message: msg };
+}
+
+/** 列出酒馆中已有世界书名（若 API 支持） */
+export async function listWorldbooks() {
+    const c = ctx();
+    if (!c || typeof c.getWorldInfoNames !== 'function') return [];
+    try { const names = await c.getWorldInfoNames(); return Array.isArray(names) ? names : []; } catch (e) { return []; }
+}
+
+/* 世界书解耦（通用本 + 各篇章本）逻辑已拆分至 worldbook-split.js，此处转发以保持兼容 */
+export { classifyEntries, writeSplitWorldbooks } from './worldbook-split.js';
+
+export default {
+    WB_FMT,
+    wbSub, wbSubKeys, buildWbPreview, buildWbJson, parseWbPreview, syncWbFromPreview,
+    wbExtractCore, wbBgCore, wbMinorCore, wbPlotCore, wbConstantEntry,
+    toTavernEntry, boundWorldbookName, writeWorldbookToTavern, listWorldbooks,
+};
