@@ -146,13 +146,17 @@ const SETTINGS_HTML = `
                 <label class="ce-label">生成参数</label>
                 <div class="ce-grid">
                     <div class="ce-field">
-                        <span>单次输出上限（tokens）</span>
+                        <span>插件内输出上限（tokens）</span>
                         <input type="number" id="ce_max_tokens" class="text_pole" step="500" min="256">
                     </div>
                 </div>
+                <p class="ce-hint" style="margin:4px 0 8px">
+                    插件会在生成时**临时**把酒馆的响应长度设为上面的值，生成后立即还原。
+                    因此不受酒馆「最大回复长度」滑块限制，也不影响酒馆正常对话。
+                </p>
                 <label class="checkbox_label">
                     <input type="checkbox" id="ce_resp_unlimited">
-                    <span>不限输出长度（交给模型自然写完，最不易截断）</span>
+                    <span>不覆盖酒馆设置（直接用酒馆自身的响应长度）</span>
                 </label>
                 <label class="checkbox_label">
                     <input type="checkbox" id="ce_auto_cont">
