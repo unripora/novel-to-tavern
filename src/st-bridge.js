@@ -27,8 +27,15 @@ export function hasApi(name) {
 
 /**
  * 裸生成：完全自定义 prompt，使用酒馆当前连接
+ *
+ * 兼容两种 generateRaw 签名：
+ *   A) 对象形式 generateRaw({ prompt, max_tokens, onDelta })  —— JS-Slash-Runner 等
+ *   B) 位置参数 generateRaw(prompt, ...)                     —— 原生酒馆
+ * 先试 A（可携带 max_tokens 提升输出上限），失败再退 B。
+ *
  * @param {string|Array} prompt 字符串提示词，或 Chat Completion 消息数组
- * @param {{signal?:AbortSignal, onDelta?:(t:string)=>void}} opts
+ * @param {{signal?:AbortSignal, onDelta?:(t:string)=>void, maxTokens?:number|string}} opts
+ *        maxTokens：传给酒馆的 max_tokens（数字，或 'unset' 表示不限制）
  * @returns {Promise<string>}
  */
 export async function aiRaw(prompt, opts = {}) {
@@ -36,20 +43,30 @@ export async function aiRaw(prompt, opts = {}) {
     if (!c || typeof c.generateRaw !== 'function') {
         throw new Error('当前环境不支持 generateRaw，请在酒馆中使用本插件');
     }
-    // 不同版本 generateRaw 参数略有差异，做兼容处理
-    const args = { prompt };
-    if (opts.onDelta) args.onDelta = opts.onDelta;
+
+    // —— 方案 A：对象形式（可带 max_tokens）——
+    const objArgs = { prompt };
+    if (opts.onDelta) objArgs.onDelta = opts.onDelta;
+    if (opts.maxTokens != null) objArgs.max_tokens = opts.maxTokens;
     try {
-        const out = await c.generateRaw(args);
-        // 部分版本 generateRaw 返回对象（含 content / finish_reason），统一取文本
+        const out = await c.generateRaw(objArgs);
         return extractText(out);
-    } catch (e) {
-        // 若因携带未知参数（如 onDelta）失败，退化为不带回调的调用
-        if (opts.onDelta) {
-            const out = await c.generateRaw({ prompt });
+    } catch (eA) {
+        // 对象形式失败，继续尝试其它签名（不要把致命错误吞掉：最后会重抛）
+        // —— 方案 B：位置参数形式（原生酒馆）——
+        try {
+            const out = await c.generateRaw(prompt);
             return extractText(out);
+        } catch (eB) {
+            // —— 方案 C：回退到最简对象形式（不带 max_tokens / onDelta）——
+            try {
+                const out = await c.generateRaw({ prompt });
+                return extractText(out);
+            } catch (eC) {
+                // 三种都失败：抛出首个错误，便于定位
+                throw eA;
+            }
         }
-        throw e;
     }
 }
 

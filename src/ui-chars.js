@@ -133,7 +133,7 @@ async function runScan() {
             const prompt = buildScanPrompt(chunks[i]);
             let raw = '';
             try {
-                raw = await generate(prompt, { signal, useStream: false, maxCont: 0 });
+                raw = await generate(prompt, { signal, useStream: false, maxCont: settings().autoCont ? 3 : 0, logEl: 'ce_scan_log', label: `扫描第${i + 1}段` });
             } catch (e) {
                 if (signal.aborted) break;
                 logTo('ce_scan_log', `第 ${i + 1} 段失败：${e.message}`, 'e');

@@ -37,15 +37,15 @@ export function isAbort(e, signal) {
 /**
  * 带重试的底层生成（非流式）
  * @param {string|Array} prompt
- * @param {{signal?:AbortSignal, onWait?:(n:number,code:number,wait:number)=>void, tries?:number}} opts
+ * @param {{signal?:AbortSignal, onWait?:Function, tries?:number, maxTokens?:number|string}} opts
  */
-export async function chat(prompt, { signal, onWait, tries = 3 } = {}) {
+export async function chat(prompt, { signal, onWait, tries = 3, maxTokens } = {}) {
     let attempt = 0;
     // 通过酒馆接口生成；不再抛 HTTP 状态码，重试针对网络/临时错误
     while (true) {
         attempt++;
         try {
-            const out = await aiRaw(prompt, { signal });
+            const out = await aiRaw(prompt, { signal, maxTokens });
             lastFinish = '';
             return out ?? '';
         } catch (e) {
@@ -59,12 +59,12 @@ export async function chat(prompt, { signal, onWait, tries = 3 } = {}) {
 }
 
 /** 带重试的流式生成 */
-export async function chatStream(prompt, { signal, onDelta, onWait, tries = 3 } = {}) {
+export async function chatStream(prompt, { signal, onDelta, onWait, tries = 3, maxTokens } = {}) {
     let attempt = 0;
     while (true) {
         attempt++;
         try {
-            const out = await aiRaw(prompt, { signal, onDelta });
+            const out = await aiRaw(prompt, { signal, onDelta, maxTokens });
             lastFinish = '';
             return out ?? '';
         } catch (e) {
@@ -81,10 +81,16 @@ export async function chatStream(prompt, { signal, onDelta, onWait, tries = 3 } 
  * 生成（支持流式 + 截断自动续写）
  * @param {string|Array} prompt
  * @param {Object} opts
+ *   maxTokens：传给酒馆的 max_tokens（数字；不传则用设置里的 maxTokens）
  */
 export async function generate(prompt, {
-    useStream = false, signal, onText, onWait, maxCont = 0, logEl, label,
+    useStream = false, signal, onText, onWait, maxCont = 0, logEl, label, maxTokens,
 } = {}) {
+    const s = settings();
+    // max_tokens 的取值：显式传入 > 设置里的「不限」> 设置里的数值
+    const mt = (maxTokens != null) ? maxTokens : (s.respUnlimited ? 'unset' : s.maxTokens);
+    // 长度判据用「数值」形式（'unset' 时不做长度判定，仅靠结构判定）
+    const mtNum = (typeof mt === 'number') ? mt : 0;
     let full = '';
     for (let round = 0; round <= maxCont; round++) {
         let part = '';
@@ -93,19 +99,19 @@ export async function generate(prompt, {
             : appendContinue(prompt, full);
         if (useStream) {
             try {
-                part = await chatStream(p, { signal, onDelta: (f) => { onText && onText(full + f); }, onWait });
+                part = await chatStream(p, { signal, onDelta: (f) => { onText && onText(full + f); }, onWait, maxTokens: mt });
             } catch (err) {
                 if (isAbort(err, signal)) throw err;
-                part = await chat(p, { signal, onWait });
+                part = await chat(p, { signal, onWait, maxTokens: mt });
             }
         } else {
-            part = await chat(p, { signal, onWait });
+            part = await chat(p, { signal, onWait, maxTokens: mt });
         }
         full += part;
         onText && onText(full);
-        // 综合判断是否截断：本轮的 finish/长度 + 全文结构未闭合
+        // 综合判断是否截断：本轮的 finish/长度 + 结构未闭合
         // 注意：长度判据只看本轮输出（续写后 full 必然更长，用 full 会误判）
-        if (!detectTruncated(part, settings().maxTokens) && !looksTruncated(full)) break;
+        if (!detectTruncated(part, mtNum) && !looksTruncated(full)) break;
         if (round >= maxCont) break;
         if (logEl) logTo(logEl, (label ? label + ' ' : '') + '检测到截断，自动续写（第 ' + (round + 1) + ' 次）…', 'w');
     }

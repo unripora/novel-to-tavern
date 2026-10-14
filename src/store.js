@@ -21,7 +21,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     showThink: false,
     sysPrefix: '',
     // 生成参数（原网页「高级参数」中的 max_tokens 与若干开关）
-    maxTokens: 4000,     // 抽卡 max_tokens
+    maxTokens: 8000,     // 单次生成 max_tokens（传给酒馆，越大越不易截断）
+    respUnlimited: false,// 是否不限输出长度（传给酒馆 max_tokens='unset'）
     useStream: true,     // 流式输出
     autoCont: true,      // 截断自动续写
     nsfw: false,         // 是否包含 NSFW 内容（世界书等任务读取）

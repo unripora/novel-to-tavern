@@ -11,7 +11,7 @@ import { ctx } from './st-bridge.js';
 import { getNovel } from './novel.js';
 import { settings } from './store.js';
 import { sampleForStyle, getCharacters } from './scan.js';
-import { generate, chat, isAbort } from './generate.js';
+import { generate, isAbort } from './generate.js';
 import { stripFence, stripThink, extractJsonArray, logTo, uniq } from './util.js';
 
 /** 世界书条目格式说明（迁移自 prompts.js） */
@@ -202,7 +202,12 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
             '只输出 JSON 数组，不要代码块、不要解释。该段没有明确设定就输出 []。\n\n文本：\n' + chunk;
         let raw = '';
         const onWait = (n, code, w) => logTo('wbLog', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
-        try { raw = await chat(userMsgs(prompt), { signal, onWait }); } catch (err) {
+        try {
+            raw = await generate(userMsgs(prompt), {
+                signal, onWait, useStream: false,
+                maxCont: settings().autoCont ? 3 : 0, logEl: 'wbLog', label: `第${i + 1}段`,
+            });
+        } catch (err) {
             if (isAbort(err, signal)) { logTo('wbLog', '已停止', 'e'); break; }
             logTo('wbLog', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
             state.next = i + 1; continue;
@@ -325,7 +330,12 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
             '只依据原文、不编造。输出 JSON 数组 [{"title":"","keys":[],"content":""}]，只输出 JSON，不要代码块、不要解释。该段无实质剧情就输出 []。\n\n文本：\n' + chunk;
         let raw = '';
         const onWait = (n, code, w) => logTo('wbLog', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
-        try { raw = await chat(userMsgs(prompt), { signal, onWait }); } catch (err) {
+        try {
+            raw = await generate(userMsgs(prompt), {
+                signal, onWait, useStream: false,
+                maxCont: settings().autoCont ? 3 : 0, logEl: 'wbLog', label: `第${i + 1}段`,
+            });
+        } catch (err) {
             if (isAbort(err, signal)) { logTo('wbLog', '已停止', 'e'); break; }
             logTo('wbLog', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
             state.next = i + 1; continue;

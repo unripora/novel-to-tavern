@@ -24,6 +24,7 @@ function bindSettings() {
         ce_ctx_cap: 'ctxCap',
         ce_full_cap: 'fullCap',
         ce_sys_prefix: 'sysPrefix',
+        ce_max_tokens: 'maxTokens',
     };
 
     // 回填
@@ -33,6 +34,10 @@ function bindSettings() {
     }
     const think = $('ce_show_think');
     if (think) think.checked = !!s.showThink;
+    const unlimited = $('ce_resp_unlimited');
+    if (unlimited) unlimited.checked = !!s.respUnlimited;
+    const autoCont = $('ce_auto_cont');
+    if (autoCont) autoCont.checked = !!s.autoCont;
 
     // 保存
     const save = $('ce_save_settings');
@@ -44,6 +49,8 @@ function bindSettings() {
                 s[key] = el.type === 'number' ? Number(el.value) : el.value;
             }
             if (think) s.showThink = think.checked;
+            if (unlimited) s.respUnlimited = unlimited.checked;
+            if (autoCont) s.autoCont = autoCont.checked;
             persist();
             flash('ce_settings_msg', '已保存', false);
         });
@@ -133,6 +140,23 @@ const SETTINGS_HTML = `
                 <label class="checkbox_label">
                     <input type="checkbox" id="ce_show_think">
                     <span>显示思考过程（保留思考型模型的 &lt;think&gt; 内容）</span>
+                </label>
+            </div>
+            <div class="ce-section">
+                <label class="ce-label">生成参数</label>
+                <div class="ce-grid">
+                    <div class="ce-field">
+                        <span>单次输出上限（tokens）</span>
+                        <input type="number" id="ce_max_tokens" class="text_pole" step="500" min="256">
+                    </div>
+                </div>
+                <label class="checkbox_label">
+                    <input type="checkbox" id="ce_resp_unlimited">
+                    <span>不限输出长度（交给模型自然写完，最不易截断）</span>
+                </label>
+                <label class="checkbox_label">
+                    <input type="checkbox" id="ce_auto_cont">
+                    <span>截断时自动续写补全</span>
                 </label>
             </div>
             <div class="ce-section">
