@@ -7,13 +7,15 @@
 
 import { settings, persist } from './store.js';
 import { BUILTINS } from './prompts.js';
-import { state, $, setRerender, setStopRun } from './ui-context.js';
+import { setLogCacheHooks } from './util.js';
+import { state, $, setRerender, setStopRun, restoreProducts, mountLogs, cacheLog, clearCachedLog } from './ui-context.js';
 import { renderNovelTab } from './ui-novel.js';
 import { renderCharsTab } from './ui-chars.js';
 import { renderCardTab } from './ui-card.js';
 import { renderTimelineTab } from './ui-timeline.js';
+import { renderWorldTab } from './ui-world.js';
 import {
-    renderPersonaTab, renderWorldTab, renderStyleTab,
+    renderPersonaTab, renderStyleTab,
     renderFirstTab, renderCheckTab, renderHistoryTab,
 } from './ui-misc.js';
 
@@ -38,6 +40,8 @@ function renderTab(name) {
     box.innerHTML = '';
     const fn = TABS[name];
     if (fn) fn(box);
+    // 回填缓存的日志（切 Tab / 刷新后不丢）
+    mountLogs(box);
 }
 
 /** 初始化模板数据 */
@@ -52,6 +56,18 @@ function initTemplates() {
     }
     const idx = state.templates.findIndex((t) => t.name === s.curTpl);
     state.curTpl = idx >= 0 ? idx : 0;
+}
+
+/** 恢复上次的选中角色（刷新不丢） */
+function initState() {
+    const s = settings();
+    state.selectedNames = Array.isArray(s.selectedNames) ? s.selectedNames : [];
+}
+
+/** 保存选中角色到设置 */
+export function saveSelectedNames() {
+    settings().selectedNames = state.selectedNames;
+    persist();
 }
 
 /** 停止当前运行中的任务 */
@@ -78,6 +94,15 @@ export function mountUI() {
     if (!tabs.dataset.bound) {
         tabs.dataset.bound = '1';
         initTemplates();
+        initState();
+        // 注入日志缓存钩子：logTo/clearLog 自动同步到 state.logs
+        setLogCacheHooks(cacheLog, clearCachedLog);
+        // 恢复上次生成的产物（角色卡/人设/世界书等，刷新不丢）
+        restoreProducts().then(() => {
+            // 恢复完成后若当前在相应 Tab，重渲染以显示产物
+            const active = tabs.querySelector('.ce-tab.active');
+            if (active) renderTab(active.dataset.tab);
+        });
         tabs.querySelectorAll('.ce-tab').forEach((btn) => {
             btn.addEventListener('click', () => {
                 tabs.querySelectorAll('.ce-tab').forEach((b) => b.classList.remove('active'));

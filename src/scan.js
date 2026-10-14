@@ -5,28 +5,36 @@
  */
 
 import { getNovel } from './novel.js';
-import { settings } from './store.js';
+import { settings, persist } from './store.js';
 import { uniq } from './util.js';
 
-/** 角色列表（内存态，含别名） */
-let characters = [];
+/** 角色列表（懒加载自设置持久化，刷新不丢） */
+let characters = null;
 
 export function getCharacters() {
+    if (characters == null) {
+        const s = settings();
+        characters = Array.isArray(s.characters) ? s.characters : [];
+    }
     return characters;
 }
 
 export function setCharacters(list) {
     characters = Array.isArray(list) ? list : [];
+    settings().characters = characters;
+    persist();
     return characters;
 }
 
 export function clearCharacters() {
     characters = [];
+    settings().characters = [];
+    persist();
 }
 
 /** 取某角色的所有称呼（名字 + 别名） */
 export function charNames(name) {
-    const c = characters.find((x) => x.name === name);
+    const c = getCharacters().find((x) => x.name === name);
     return uniq([name, ...((c && c.aliases) ? c.aliases : [])]);
 }
 

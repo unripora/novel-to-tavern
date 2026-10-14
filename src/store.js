@@ -26,6 +26,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     useStream: true,     // 流式输出
     autoCont: true,      // 截断自动续写
     nsfw: false,         // 是否包含 NSFW 内容（世界书等任务读取）
+    wbMode: 'whole',     // 世界书生成方式：'whole' 整本生成 | 'chapter' 按篇章生成
     model: '',           // 展示用的模型名（实际调用走酒馆连接，仅记录）
     // 数值面板模式
     statPanelCard: false,    // 角色卡：是否开启数值面板模式
@@ -40,6 +41,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     curNovel: '',        // 当前正文对应的记录名（刷新后自动恢复用）
     tlSynopsis: '',      // 时间线：梗概划分草稿（篇名+概述）
     tlRefDoc: '',        // 时间线：参考文档草稿
+    characters: [],      // 扫描到的角色列表（含别名/次数），刷新不丢
+    selectedNames: [],   // 已选角色名（用于生成），刷新不丢
 });
 
 /** 内存兜底（非酒馆环境或 localforage 不可用时使用） */
@@ -119,4 +122,23 @@ export const novelStore = {
     },
 };
 
-export default { MODULE_NAME, DEFAULT_SETTINGS, settings, persist, novelStore };
+/** 面板产物存储（角色卡/人设/世界书等大文本，刷新不丢） */
+export const panelStore = {
+    async save(key, val) {
+        const inst = lf();
+        if (inst) return inst.setItem('panel:' + key, val);
+        mem['panel:' + key] = val;
+    },
+    async load(key) {
+        const inst = lf();
+        if (inst) return (await inst.getItem('panel:' + key)) ?? null;
+        return mem['panel:' + key] ?? null;
+    },
+    async del(key) {
+        const inst = lf();
+        if (inst) return inst.removeItem('panel:' + key);
+        delete mem['panel:' + key];
+    },
+};
+
+export default { MODULE_NAME, DEFAULT_SETTINGS, settings, persist, novelStore, panelStore, persistentAvailable };

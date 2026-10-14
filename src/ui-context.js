@@ -6,6 +6,7 @@
  */
 
 import { flash } from './util.js';
+import { panelStore } from './store.js';
 
 /** 面板级状态 */
 export const state = {
@@ -18,9 +19,90 @@ export const state = {
     styleText: '',
     wbEntries: [],
     wbPreview: '',
+    wbGroups: null,
     running: false,
     controller: null,
+    // 日志缓存：切 Tab / 刷新后回显（key = 日志元素 id，value = 文本）
+    logs: {},
 };
+
+/** 需要持久化的产物字段（切 Tab 保留内存、刷新存活于 localforage） */
+const PRODUCT_KEYS = ['cardText', 'personaText', 'firstText', 'styleText', 'wbEntries', 'wbPreview', 'wbGroups'];
+/** 日志缓存持久化：仅在生成期间防抖存一次，避免频繁写入 */
+let _logSaveTimer = null;
+
+/** 保存产物到 localforage（大文本，刷新不丢） */
+export function saveProducts() {
+    const data = {};
+    for (const k of PRODUCT_KEYS) data[k] = state[k];
+    return panelStore.save('products', data).catch(() => { });
+}
+
+/** 保存日志缓存（防抖，刷新后回显 AI 调用日志） */
+function saveLogs() {
+    if (_logSaveTimer) clearTimeout(_logSaveTimer);
+    _logSaveTimer = setTimeout(() => {
+        _logSaveTimer = null;
+        panelStore.save('logs', state.logs).catch(() => { });
+    }, 800);
+}
+
+/** 从 localforage 恢复产物（面板首次挂载时调用一次） */
+export async function restoreProducts() {
+    try {
+        const data = await panelStore.load('products');
+        if (data && typeof data === 'object') {
+            for (const k of PRODUCT_KEYS) {
+                if (data[k] != null) state[k] = data[k];
+            }
+        }
+    } catch (e) { /* 忽略 */ }
+    try {
+        const logs = await panelStore.load('logs');
+        if (logs && typeof logs === 'object') state.logs = logs;
+    } catch (e) { /* 忽略 */ }
+}
+
+/** 记录一条日志到缓存（供切 Tab / 刷新后回显） */
+export function cacheLog(elId, line) {
+    if (!state.logs[elId]) state.logs[elId] = '';
+    state.logs[elId] += line + '\n';
+    saveLogs();
+}
+
+/** 取缓存的日志文本 */
+export function getCachedLog(elId) {
+    return state.logs[elId] || '';
+}
+
+/** 清空某日志缓存 */
+export function clearCachedLog(elId) {
+    state.logs[elId] = '';
+    saveLogs();
+}
+
+/**
+ * 把缓存的日志回填到容器内所有 .ce-log 元素（切 Tab / 刷新后回显）
+ * @param {HTMLElement} root 渲染后的 Tab 容器
+ */
+export function mountLogs(root) {
+    if (!root) return;
+    root.querySelectorAll('.ce-log').forEach((el) => {
+        const id = el.id;
+        const cached = state.logs[id];
+        if (cached) {
+            el.innerHTML = '';
+            cached.split('\n').forEach((line, i, arr) => {
+                if (i === arr.length - 1 && line === '') return;
+                const span = document.createElement('span');
+                span.textContent = line + '\n';
+                el.appendChild(span);
+            });
+            el.classList.add('show');
+            el.scrollTop = el.scrollHeight;
+        }
+    });
+}
 
 /** 由 ui.js 注入的「重新渲染某 Tab」函数 */
 export let rerender = () => { };

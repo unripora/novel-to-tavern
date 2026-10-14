@@ -3,7 +3,7 @@
  */
 
 import { flash, logTo, clearLog, stripFence, stripThink } from './util.js';
-import { settings } from './store.js';
+import { settings, persist } from './store.js';
 import * as novel from './novel.js';
 import * as scan from './scan.js';
 import { generate } from './generate.js';
@@ -90,6 +90,9 @@ export function renderCharsTab(box) {
 
 function renderCharChips() {
     const box = $('ce_charlist');
+    // 顺带持久化选中角色（所有变更路径最后都会重渲染这里）
+    settings().selectedNames = state.selectedNames;
+    persist();
     if (!box) return;
     const chars = scan.getCharacters();
     box.innerHTML = '';

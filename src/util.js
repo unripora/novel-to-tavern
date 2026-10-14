@@ -74,8 +74,17 @@ export function uniq(arr) {
     return [...new Set((arr || []).filter(Boolean))];
 }
 
+/** 日志缓存钩子（由 ui-context 注入，避免循环依赖） */
+let _logCacheHook = null;   // (elId, line) => void
+let _logClearHook = null;   // (elId) => void
+export function setLogCacheHooks(onLog, onClear) {
+    _logCacheHook = onLog;
+    _logClearHook = onClear;
+}
+
 /** 简易日志面板输出 */
 export function logTo(elId, msg, cls) {
+    if (_logCacheHook) { try { _logCacheHook(elId, msg); } catch (e) { /* ignore */ } }
     const el = document.getElementById(elId);
     if (!el) return;
     el.classList.add('show');
@@ -87,6 +96,7 @@ export function logTo(elId, msg, cls) {
 }
 
 export function clearLog(elId) {
+    if (_logClearHook) { try { _logClearHook(elId); } catch (e) { /* ignore */ } }
     const el = document.getElementById(elId);
     if (!el) return;
     el.innerHTML = '';
@@ -128,5 +138,5 @@ export function clearFlash(elId) {
 
 export default {
     toast, yieldToUI, stripFence, stripThink, dispThink,
-    extractJsonArray, uniq, logTo, clearLog, flash, clearFlash,
+    extractJsonArray, uniq, logTo, clearLog, flash, clearFlash, setLogCacheHooks,
 };

@@ -2,7 +2,7 @@
  * ui-card.js —— 「角色卡」Tab（生成 / 预览 / 导入酒馆）
  */
 
-import { toast, flash, logTo, clearLog, stripFence, stripThink } from './util.js';
+import { flash, logTo, clearLog, stripFence, stripThink } from './util.js';
 import { settings, persist } from './store.js';
 import * as scan from './scan.js';
 import * as extras from './extras.js';
@@ -10,7 +10,8 @@ import * as writer from './card-writer.js';
 import { generate } from './generate.js';
 import { DEFAULT_TPL, buildStatPanelBlock, buildStageHeader } from './prompts.js';
 import * as timeline from './timeline.js';
-import { $, state, escapeHtml, escapeAttr, stopRun } from './ui-context.js';
+import { openCardPreview as openCardPreviewPanel } from './ui-card-preview.js';
+import { $, state, escapeHtml, stopRun, saveProducts } from './ui-context.js';
 
 export function renderCardTab(box) {
     const tpls = state.templates.map((t, i) =>
@@ -98,7 +99,7 @@ export function renderCardTab(box) {
     bindStatPanelUI();
     bindTimelineUI();
     $('ce_output').value = state.cardText;
-    $('ce_output').addEventListener('input', (e) => { state.cardText = e.target.value; });
+    $('ce_output').addEventListener('input', (e) => { state.cardText = e.target.value; saveProducts(); });
 
     $('ce_gen').addEventListener('click', runGenerate);
     $('ce_stop').addEventListener('click', stopRun);
@@ -324,6 +325,7 @@ async function runGenerate() {
     }
     state.cardText = (tlMode === 'split') ? joinSplitCards(results) : joinCards(results, state.selectedNames);
     $('ce_output').value = state.cardText;
+    saveProducts();
     flash('ce_gen_msg', signal.aborted ? '已停止' : '生成完成');
 
     if (state.cardText) {
@@ -456,6 +458,7 @@ async function continueGenerate() {
         });
         state.cardText = state.cardText + '\n' + stripThink(stripFence(raw)).trim();
         $('ce_output').value = state.cardText;
+        saveProducts();
         flash('ce_out_msg', '续写完成');
     } catch (e) {
         flash('ce_out_msg', '续写失败：' + e.message, true);
@@ -463,41 +466,5 @@ async function continueGenerate() {
 }
 
 function openCardPreview() {
-    const box = $('ce_card_preview');
-    if (!state.cardText.trim()) { flash('ce_out_msg', '还没有可预览的内容', true); return; }
-    const card = writer.parseCard(state.cardText, { name: state.selectedNames[0] });
-    box.style.display = 'block';
-    box.innerHTML = `
-        <div class="ce-preview-head">角色卡预览（可编辑后导入）</div>
-        <label>名称</label><input type="text" id="ce_pv_name" class="text_pole" value="${escapeAttr(card.name)}">
-        <label>描述 / 主体</label><textarea id="ce_pv_desc" class="text_pole" rows="10">${escapeHtml(card.description || card.raw || '')}</textarea>
-        <label>性格</label><textarea id="ce_pv_personality" class="text_pole" rows="3">${escapeHtml(card.personality || '')}</textarea>
-        <label>开场白（first_mes）</label><textarea id="ce_pv_first" class="text_pole" rows="4">${escapeHtml(card.first_mes || '')}</textarea>
-        <div class="ce-rowline">
-            <button type="button" class="menu_button" id="ce_pv_import">确认导入到酒馆</button>
-            <button type="button" class="menu_button" id="ce_pv_cancel">取消</button>
-            <span id="ce_pv_msg" class="ce-msg"></span>
-        </div>`;
-
-    $('ce_pv_cancel').addEventListener('click', () => { box.style.display = 'none'; });
-    $('ce_pv_import').addEventListener('click', async () => {
-        const desc = $('ce_pv_desc').value;
-        const payload = {
-            name: $('ce_pv_name').value.trim(),
-            description: desc,
-            raw: desc,                          // 兜底：确保主体内容不为空
-            personality: $('ce_pv_personality').value,
-            first_mes: $('ce_pv_first').value,
-            creator_notes: '由「角色卡提取工具」插件生成',
-        };
-        flash('ce_pv_msg', '正在导入…');
-        const res = await writer.writeCharacterToTavern(payload, {
-            onLog: (m, e) => logTo('ce_gen_log', '[导入] ' + m, e ? 'e' : ''),
-        });
-        flash('ce_pv_msg', res.message, !res.ok);
-        if (res.ok) {
-            toast('角色已创建到酒馆：' + payload.name);
-            box.style.display = 'none';
-        }
-    });
+    openCardPreviewPanel();
 }
