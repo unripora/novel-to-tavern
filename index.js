@@ -80,6 +80,118 @@ function bindModal() {
     }
 }
 
+/** 探测本扩展在酒馆中的真实文件夹名（如 third-party/novel-to-tavern） */
+function detectExtensionFolder() {
+    try {
+        const url = import.meta.url || '';
+        // .../scripts/extensions/third-party/<folder>/index.js
+        const m = url.match(/extensions\/(.+)\/[^/]+\.js(?:\?|$)/);
+        if (m && m[1]) return m[1];
+    } catch (e) { /* ignore */ }
+    return '';
+}
+
+/** 内联设置面板 HTML（不依赖模板文件路径，作为兜底与首选） */
+const SETTINGS_HTML = `
+<div class="ce-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>角色卡提取工具</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <p class="ce-hint">
+                导入小说 · 扫描角色 · 按模板抽取角色卡 / 世界书 / 人设 / 文风。
+                <b>使用酒馆当前接口</b>，无需另填 API。
+            </p>
+            <div class="ce-btnrow">
+                <button type="button" class="menu_button" id="ce_open_panel">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 打开角色卡提取工具
+                </button>
+            </div>
+            <div class="ce-section">
+                <label class="ce-label">扫描参数</label>
+                <div class="ce-grid">
+                    <div class="ce-field">
+                        <span>扫描分段大小（字符）</span>
+                        <input type="number" id="ce_chunk_size" class="text_pole" step="5000" min="10000">
+                    </div>
+                    <div class="ce-field">
+                        <span>扫描段数上限</span>
+                        <input type="number" id="ce_scan_cap" class="text_pole" step="5" min="1">
+                    </div>
+                    <div class="ce-field">
+                        <span>相关段落上下文上限</span>
+                        <input type="number" id="ce_ctx_cap" class="text_pole" step="10000" min="10000">
+                    </div>
+                    <div class="ce-field">
+                        <span>全文模式上下文上限</span>
+                        <input type="number" id="ce_full_cap" class="text_pole" step="10000" min="10000">
+                    </div>
+                </div>
+                <label class="checkbox_label">
+                    <input type="checkbox" id="ce_show_think">
+                    <span>显示思考过程（保留思考型模型的 &lt;think&gt; 内容）</span>
+                </label>
+            </div>
+            <div class="ce-section">
+                <label class="ce-label">附加系统提示（可选）</label>
+                <textarea id="ce_sys_prefix" class="text_pole" rows="3"
+                    placeholder="会加在每次请求最前面，对扫描 / 生成 / 世界书 / 文风都生效。留空则用工具内置提示词。"></textarea>
+            </div>
+            <div class="ce-btnrow">
+                <button type="button" class="menu_button" id="ce_save_settings">保存设置</button>
+                <span class="ce-msg" id="ce_settings_msg"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="ce-modal" id="ce_modal" style="display:none">
+    <div class="ce-modal-mask"></div>
+    <div class="ce-modal-body">
+        <div class="ce-modal-head">
+            <b>角色卡提取工具</b>
+            <span class="ce-modal-close" id="ce_modal_close"><i class="fa-solid fa-xmark"></i></span>
+        </div>
+        <div class="ce-modal-tabs" id="ce_tabs">
+            <button type="button" class="ce-tab active" data-tab="novel">小说</button>
+            <button type="button" class="ce-tab" data-tab="timeline">时间线</button>
+            <button type="button" class="ce-tab" data-tab="chars">角色</button>
+            <button type="button" class="ce-tab" data-tab="card">角色卡</button>
+            <button type="button" class="ce-tab" data-tab="persona">人设</button>
+            <button type="button" class="ce-tab" data-tab="world">世界书</button>
+            <button type="button" class="ce-tab" data-tab="style">文风</button>
+            <button type="button" class="ce-tab" data-tab="first">开场白</button>
+            <button type="button" class="ce-tab" data-tab="check">自检</button>
+            <button type="button" class="ce-tab" data-tab="history">历史</button>
+        </div>
+        <div class="ce-modal-content" id="ce_content">
+            <div class="ce-placeholder">面板加载中…</div>
+        </div>
+    </div>
+</div>`;
+
+/** 把设置面板挂载到酒馆扩展设置区 */
+async function mountSettings(context) {
+    let html = '';
+    // 优先用酒馆模板渲染（能正确本地化）；用探测到的真实文件夹名
+    const folder = detectExtensionFolder();
+    if (context?.renderExtensionTemplateAsync && folder) {
+        try {
+            html = await context.renderExtensionTemplateAsync(folder, 'settings');
+        } catch (e) {
+            console.warn('[card-extractor] 模板渲染失败，改用内联模板', e);
+        }
+    }
+    // 兜底：内联模板
+    if (!html) html = SETTINGS_HTML;
+
+    const target = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
+    if (target) target.insertAdjacentHTML('beforeend', html);
+    else console.warn('[card-extractor] 未找到扩展设置容器，跳过挂载');
+}
+
 /** 入口 */
 jQuery(async () => {
     try {
@@ -91,15 +203,7 @@ jQuery(async () => {
         settings();
 
         // 渲染并挂载设置面板
-        let html = '';
-        if (context?.renderExtensionTemplateAsync) {
-            html = await context.renderExtensionTemplateAsync('third-party/card-extractor', 'settings');
-        }
-        if (!html) {
-            // 兜底：直接内联模板（便于非酒馆环境调试）
-            html = '<div class="ce-settings">角色卡提取工具已加载（模板渲染不可用）</div>';
-        }
-        jQuery('#extensions_settings2').append(html);
+        await mountSettings(context);
 
         bindSettings();
         bindModal();
