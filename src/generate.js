@@ -111,7 +111,11 @@ export async function generate(prompt, {
         onText && onText(full);
         // 综合判断是否截断：本轮的 finish/长度 + 结构未闭合
         // 注意：长度判据只看本轮输出（续写后 full 必然更长，用 full 会误判）
-        if (!detectTruncated(part, mtNum) && !looksTruncated(full)) break;
+        const t1 = detectTruncated(part, mtNum);
+        const t2 = looksTruncated(full);
+        console.log('[card-extractor][generate]', label || '', '本轮长度:', part.length,
+            '| max_tokens =', mt, '| 截断判定: length/结构=', t1, '| 全文结构=', t2, '| 轮次:', round + '/' + maxCont);
+        if (!t1 && !t2) break;
         if (round >= maxCont) break;
         if (logEl) logTo(logEl, (label ? label + ' ' : '') + '检测到截断，自动续写（第 ' + (round + 1) + ' 次）…', 'w');
     }
