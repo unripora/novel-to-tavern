@@ -21,8 +21,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     showThink: false,
     sysPrefix: '',
     // 生成参数（原网页「高级参数」中的 max_tokens 与若干开关）
-    maxTokens: 8000,     // 单次生成 max_tokens（传给酒馆，越大越不易截断）
-    respUnlimited: false,// 是否不限输出长度（传给酒馆 max_tokens='unset'）
+    maxTokens: 8000,     // 插件内输出上限（覆盖酒馆设置；仅在 useGlobalResp=false 时生效）
+    useGlobalResp: false,// 是否使用酒馆全局设置（true=用酒馆响应长度；false=用插件自定义）
     useStream: true,     // 流式输出
     autoCont: true,      // 截断自动续写
     nsfw: false,         // 是否包含 NSFW 内容（世界书等任务读取）

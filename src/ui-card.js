@@ -17,73 +17,81 @@ export function renderCardTab(box) {
         `<option value="${i}" ${i === state.curTpl ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('');
     box.innerHTML = `
         <div class="ce-pane">
-            <div class="ce-rowline">
-                <label>角色卡模板</label>
-                <select id="ce_tpl_sel" class="text_pole">${tpls}</select>
-                <button type="button" class="menu_button" id="ce_tpl_toggle">显示/编辑</button>
-            </div>
-            <textarea id="ce_tpl_editor" class="text_pole" rows="10" style="display:none"></textarea>
-            <div class="ce-rowline" id="ce_tpl_ops" style="display:none">
-                <button type="button" class="menu_button" id="ce_tpl_new">新建</button>
-                <button type="button" class="menu_button" id="ce_tpl_save">保存</button>
-                <button type="button" class="menu_button" id="ce_tpl_reset">恢复默认</button>
-                <button type="button" class="menu_button" id="ce_tpl_del">删除</button>
-                <span id="ce_tpl_msg" class="ce-msg"></span>
-            </div>
-            <div class="ce-rowline">
-                <label>已选角色：<span id="ce_sel_names">${escapeHtml(state.selectedNames.join('、') || '（无，去「角色」页选择）')}</span></label>
-            </div>
-            <div class="ce-rowline">
-                <label>详细程度</label>
-                <select id="ce_detail" class="text_pole">
-                    <option value="concise">精简</option>
-                    <option value="medium" selected>适中</option>
-                    <option value="rich">详尽</option>
-                </select>
-                <label class="checkbox_label"><input type="checkbox" id="ce_nsfw"> 含 NSFW</label>
-                <label class="checkbox_label"><input type="checkbox" id="ce_full_ctx"> 用全文</label>
-            </div>
-            <div class="ce-rowline">
-                <label class="checkbox_label"><input type="checkbox" id="ce_stat_panel"> 数值面板模式</label>
-                <span class="ce-faint">开启后在角色卡末尾追加数值面板（含 1-10 强度评分）</span>
-            </div>
-            <div id="ce_stat_box" style="display:none">
+            <div class="ce-section">
+                <label class="ce-label">角色卡模板</label>
                 <div class="ce-rowline">
-                    <input type="text" id="ce_stat_fields" class="text_pole"
-                        placeholder="数值字段（留空由 AI 依作品类型决定），如：等级/HP/MP/装备/技能">
+                    <select id="ce_tpl_sel" class="text_pole" style="flex:1">${tpls}</select>
+                    <button type="button" class="menu_button" id="ce_tpl_toggle">显示/编辑</button>
                 </div>
-                <div class="ce-rowline">
-                    <input type="text" id="ce_stat_refs" class="text_pole"
-                        placeholder="参考数值（可空），如：等级 75 · HP 1200">
+                <textarea id="ce_tpl_editor" class="text_pole" rows="10" style="display:none"></textarea>
+                <div class="ce-rowline" id="ce_tpl_ops" style="display:none">
+                    <button type="button" class="menu_button" id="ce_tpl_new">新建</button>
+                    <button type="button" class="menu_button" id="ce_tpl_save">保存</button>
+                    <button type="button" class="menu_button" id="ce_tpl_reset">恢复默认</button>
+                    <button type="button" class="menu_button" id="ce_tpl_del">删除</button>
+                    <span id="ce_tpl_msg" class="ce-msg"></span>
                 </div>
             </div>
-            <div class="ce-rowline">
-                <label>时间线模式</label>
-                <select id="ce_tl_mode" class="text_pole">
-                    <option value="off">不使用（整本抽取）</option>
-                    <option value="single">单卡分阶段（一张卡内含各篇章）</option>
-                    <option value="split">按篇章拆多卡</option>
-                </select>
-                <span id="ce_tl_hint" class="ce-faint"></span>
+            <div class="ce-section">
+                <label class="ce-label">生成设置</label>
+                <div class="ce-rowline">
+                    <label>已选角色：<span id="ce_sel_names">${escapeHtml(state.selectedNames.join('、') || '（无，去「角色」页选择）')}</span></label>
+                </div>
+                <div class="ce-rowline">
+                    <label>详细程度</label>
+                    <select id="ce_detail" class="text_pole">
+                        <option value="concise">精简</option>
+                        <option value="medium" selected>适中</option>
+                        <option value="rich">详尽</option>
+                    </select>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_nsfw"> 含 NSFW</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_full_ctx"> 用全文</label>
+                </div>
+                <div class="ce-rowline">
+                    <label class="checkbox_label"><input type="checkbox" id="ce_stat_panel"> 数值面板模式</label>
+                    <span class="ce-faint">开启后在角色卡末尾追加数值面板（含 1-10 强度评分）</span>
+                </div>
+                <div id="ce_stat_box" style="display:none">
+                    <div class="ce-rowline">
+                        <input type="text" id="ce_stat_fields" class="text_pole"
+                            placeholder="数值字段（留空由 AI 依作品类型决定），如：等级/HP/MP/装备/技能">
+                    </div>
+                    <div class="ce-rowline">
+                        <input type="text" id="ce_stat_refs" class="text_pole"
+                            placeholder="参考数值（可空），如：等级 75 · HP 1200">
+                    </div>
+                </div>
+                <div class="ce-rowline">
+                    <label>时间线模式</label>
+                    <select id="ce_tl_mode" class="text_pole">
+                        <option value="off">不使用（整本抽取）</option>
+                        <option value="single">单卡分阶段（一张卡内含各篇章）</option>
+                        <option value="split">按篇章拆多卡</option>
+                    </select>
+                    <span id="ce_tl_hint" class="ce-faint"></span>
+                </div>
+                <div class="ce-rowline" id="ce_tl_pick_row" style="display:none">
+                    <label>限定篇章</label>
+                    <select id="ce_tl_pick" class="text_pole"><option value="">（全部篇章）</option></select>
+                </div>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_gen">生成角色卡</button>
+                    <button type="button" class="menu_button" id="ce_stop" style="display:none">停止</button>
+                    <span id="ce_gen_msg" class="ce-msg"></span>
+                </div>
             </div>
-            <div class="ce-rowline" id="ce_tl_pick_row" style="display:none">
-                <label>限定篇章</label>
-                <select id="ce_tl_pick" class="text_pole"><option value="">（全部篇章）</option></select>
+            <div class="ce-section">
+                <label class="ce-label">生成结果</label>
+                <div class="ce-log" id="ce_gen_log"></div>
+                <textarea id="ce_output" class="text_pole" rows="12" placeholder="生成的角色卡会显示在这里，可直接编辑…"></textarea>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_preview">预览 / 导入酒馆</button>
+                    <button type="button" class="menu_button" id="ce_export">导出 .json</button>
+                    <button type="button" class="menu_button" id="ce_cont">继续续写</button>
+                    <span id="ce_out_msg" class="ce-msg"></span>
+                </div>
+                <div class="ce-preview" id="ce_card_preview" style="display:none"></div>
             </div>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_gen">生成角色卡</button>
-                <button type="button" class="menu_button" id="ce_stop" style="display:none">停止</button>
-                <span id="ce_gen_msg" class="ce-msg"></span>
-            </div>
-            <div class="ce-log" id="ce_gen_log"></div>
-            <textarea id="ce_output" class="text_pole" rows="12" placeholder="生成的角色卡会显示在这里，可直接编辑…"></textarea>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_preview">预览 / 导入酒馆</button>
-                <button type="button" class="menu_button" id="ce_export">导出 .json</button>
-                <button type="button" class="menu_button" id="ce_cont">继续续写</button>
-                <span id="ce_out_msg" class="ce-msg"></span>
-            </div>
-            <div class="ce-preview" id="ce_card_preview" style="display:none"></div>
         </div>`;
 
     bindTemplateUI();

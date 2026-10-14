@@ -15,43 +15,49 @@ import { $, state, escapeHtml, copyText, downloadText, stopRun } from './ui-cont
 export function renderPersonaTab(box) {
     box.innerHTML = `
         <div class="ce-pane">
-            <label>你希望的设定</label>
-            <textarea id="ce_pn_desc" class="text_pole" rows="4"
-                placeholder="例：名字叫江离，女，24 岁，INFP，在城南开一家花店…"></textarea>
-            <div class="ce-rowline">
-                <input type="text" id="ce_pn_char" class="text_pole" placeholder="与哪个角色产生关系（可空）">
-                <select id="ce_pn_detail" class="text_pole">
-                    <option value="concise">精简</option>
-                    <option value="medium" selected>适中</option>
-                    <option value="rich">详尽</option>
-                </select>
-            </div>
-            <textarea id="ce_pn_rel" class="text_pole" rows="3" placeholder="你和 TA 的关系、共同经历（可空）"></textarea>
-            <div class="ce-rowline">
-                <label class="checkbox_label"><input type="checkbox" id="ce_pn_use_novel" checked> 结合小说世界观</label>
-                <label class="checkbox_label"><input type="checkbox" id="ce_pn_nsfw"> 含 NSFW</label>
-            </div>
-            <div class="ce-rowline">
-                <label class="checkbox_label"><input type="checkbox" id="ce_pn_stat"> 数值面板模式</label>
-                <span class="ce-faint">追加数值面板（含与角色的相对强度对比）</span>
-            </div>
-            <div id="ce_pn_stat_box" style="display:none">
+            <div class="ce-section">
+                <label class="ce-label">人设设定</label>
+                <label>你希望的设定</label>
+                <textarea id="ce_pn_desc" class="text_pole" rows="4"
+                    placeholder="例：名字叫江离，女，24 岁，INFP，在城南开一家花店…"></textarea>
                 <div class="ce-rowline">
-                    <input type="text" id="ce_pn_stat_fields" class="text_pole"
-                        placeholder="数值字段（留空由 AI 依作品类型决定）">
+                    <input type="text" id="ce_pn_char" class="text_pole" placeholder="与哪个角色产生关系（可空）">
+                    <select id="ce_pn_detail" class="text_pole">
+                        <option value="concise">精简</option>
+                        <option value="medium" selected>适中</option>
+                        <option value="rich">详尽</option>
+                    </select>
+                </div>
+                <textarea id="ce_pn_rel" class="text_pole" rows="3" placeholder="你和 TA 的关系、共同经历（可空）"></textarea>
+                <div class="ce-rowline">
+                    <label class="checkbox_label"><input type="checkbox" id="ce_pn_use_novel" checked> 结合小说世界观</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_pn_nsfw"> 含 NSFW</label>
                 </div>
                 <div class="ce-rowline">
-                    <input type="text" id="ce_pn_stat_refs" class="text_pole"
-                        placeholder="参考数值（可空）">
+                    <label class="checkbox_label"><input type="checkbox" id="ce_pn_stat"> 数值面板模式</label>
+                    <span class="ce-faint">追加数值面板（含与角色的相对强度对比）</span>
+                </div>
+                <div id="ce_pn_stat_box" style="display:none">
+                    <div class="ce-rowline">
+                        <input type="text" id="ce_pn_stat_fields" class="text_pole"
+                            placeholder="数值字段（留空由 AI 依作品类型决定）">
+                    </div>
+                    <div class="ce-rowline">
+                        <input type="text" id="ce_pn_stat_refs" class="text_pole"
+                            placeholder="参考数值（可空）">
+                    </div>
+                </div>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_pn_run">生成 user 人设</button>
+                    <span id="ce_pn_msg" class="ce-msg"></span>
                 </div>
             </div>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_pn_run">生成 user 人设</button>
-                <span id="ce_pn_msg" class="ce-msg"></span>
+            <div class="ce-section">
+                <label class="ce-label">生成结果</label>
+                <textarea id="ce_pn_out" class="text_pole" rows="10" placeholder="生成的 user 人设会显示在这里…"></textarea>
+                <div class="ce-rowline"><button type="button" class="menu_button" id="ce_pn_copy">复制</button></div>
+                <p class="ce-tip">用法：复制后粘贴到酒馆「用户角色（Persona）」里。</p>
             </div>
-            <textarea id="ce_pn_out" class="text_pole" rows="10" placeholder="生成的 user 人设会显示在这里…"></textarea>
-            <div class="ce-rowline"><button type="button" class="menu_button" id="ce_pn_copy">复制</button></div>
-            <p class="ce-tip">用法：复制后粘贴到酒馆「用户角色（Persona）」里。</p>
         </div>`;
 
     $('ce_pn_out').value = state.personaText;
@@ -108,37 +114,43 @@ function bindPersonaStatUI() {
 export function renderWorldTab(box) {
     box.innerHTML = `
         <div class="ce-pane">
-            <div class="ce-rowline">
-                <input type="text" id="ce_wb_name" class="text_pole" placeholder="世界书名称，如：《XX》世界观">
+            <div class="ce-section">
+                <label class="ce-label">生成世界书</label>
+                <div class="ce-rowline">
+                    <input type="text" id="ce_wb_name" class="text_pole" style="flex:1" placeholder="世界书名称，如：《XX》世界观">
+                </div>
+                <div class="ce-rowline">
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_nsfw"> 含成人设定</label>
+                    <label>配角处理</label>
+                    <select id="ce_wb_minor_mode" class="text_pole">
+                        <option value="group">群像合集</option>
+                        <option value="each">每个配角单独一条</option>
+                    </select>
+                </div>
+                <div class="ce-rowline">
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_extract" checked> 提取条目</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_bg"> 共享背景</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_minor"> 配角群像</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_plot"> 剧情分段</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_chars"> 人物列表</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_plotlist"> 剧情大纲</label>
+                </div>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_wb_run">生成所选世界书</button>
+                    <span id="ce_wb_msg" class="ce-msg"></span>
+                </div>
+                <div class="ce-log" id="ce_wb_log"></div>
             </div>
-            <div class="ce-rowline">
-                <label class="checkbox_label"><input type="checkbox" id="ce_wb_nsfw"> 含成人设定</label>
-                <label>配角处理</label>
-                <select id="ce_wb_minor_mode" class="text_pole">
-                    <option value="group">群像合集</option>
-                    <option value="each">每个配角单独一条</option>
-                </select>
-            </div>
-            <div class="ce-rowline">
-                <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_extract" checked> 提取条目</label>
-                <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_bg"> 共享背景</label>
-                <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_minor"> 配角群像</label>
-                <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_plot"> 剧情分段</label>
-                <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_chars"> 人物列表</label>
-                <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_plotlist"> 剧情大纲</label>
-            </div>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_wb_run">生成所选世界书</button>
-                <span id="ce_wb_msg" class="ce-msg"></span>
-            </div>
-            <div class="ce-log" id="ce_wb_log"></div>
-            <textarea id="ce_wb_out" class="text_pole" rows="12" placeholder="提取的世界书条目会显示在这里…"></textarea>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_wb_write_new">写入酒馆（新建文件）</button>
-                <button type="button" class="menu_button" id="ce_wb_write_append">写入酒馆（追加到角色绑定）</button>
-                <button type="button" class="menu_button" id="ce_wb_dl">导出 .json</button>
-                <button type="button" class="menu_button" id="ce_wb_clear">清空</button>
-                <span id="ce_wb_msg2" class="ce-msg"></span>
+            <div class="ce-section">
+                <label class="ce-label">条目预览与写入</label>
+                <textarea id="ce_wb_out" class="text_pole" rows="12" placeholder="提取的世界书条目会显示在这里…"></textarea>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_wb_write_new">写入酒馆（新建文件）</button>
+                    <button type="button" class="menu_button" id="ce_wb_write_append">写入酒馆（追加到角色绑定）</button>
+                    <button type="button" class="menu_button" id="ce_wb_dl">导出 .json</button>
+                    <button type="button" class="menu_button" id="ce_wb_clear">清空</button>
+                    <span id="ce_wb_msg2" class="ce-msg"></span>
+                </div>
             </div>
             <div class="ce-section">
                 <label class="ce-label">世界书解耦（按篇章拆分，避免跨篇章 OOC）</label>
@@ -308,16 +320,22 @@ async function writeWorld(mode) {
 export function renderStyleTab(box) {
     box.innerHTML = `
         <div class="ce-pane">
-            <div class="ce-rowline">
-                <label class="checkbox_label"><input type="checkbox" id="ce_style_nsfw"> 含情欲描写文风</label>
+            <div class="ce-section">
+                <label class="ce-label">文风设置</label>
+                <div class="ce-rowline">
+                    <label class="checkbox_label"><input type="checkbox" id="ce_style_nsfw"> 含情欲描写文风</label>
+                </div>
+                <textarea id="ce_style_extra" class="text_pole" rows="3" placeholder="额外要求 / 侧重点（可空）"></textarea>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_style_run">蒸馏文风</button>
+                    <span id="ce_style_msg" class="ce-msg"></span>
+                </div>
             </div>
-            <textarea id="ce_style_extra" class="text_pole" rows="3" placeholder="额外要求 / 侧重点（可空）"></textarea>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_style_run">蒸馏文风</button>
-                <span id="ce_style_msg" class="ce-msg"></span>
+            <div class="ce-section">
+                <label class="ce-label">生成结果</label>
+                <textarea id="ce_style_out" class="text_pole" rows="10" placeholder="文风分析 + 可复用文风提示词会显示在这里…"></textarea>
+                <div class="ce-rowline"><button type="button" class="menu_button" id="ce_style_copy">复制</button></div>
             </div>
-            <textarea id="ce_style_out" class="text_pole" rows="10" placeholder="文风分析 + 可复用文风提示词会显示在这里…"></textarea>
-            <div class="ce-rowline"><button type="button" class="menu_button" id="ce_style_copy">复制</button></div>
         </div>`;
 
     $('ce_style_out').value = state.styleText;
@@ -338,25 +356,31 @@ export function renderStyleTab(box) {
 export function renderFirstTab(box) {
     box.innerHTML = `
         <div class="ce-pane">
-            <div class="ce-rowline">
-                <input type="text" id="ce_fm_char" class="text_pole" placeholder="给谁写（留空用当前角色卡）">
-                <select id="ce_fm_view" class="text_pole">
-                    <option value="second" selected>第二人称</option>
-                    <option value="first">第一人称</option>
-                    <option value="third">第三人称</option>
-                </select>
+            <div class="ce-section">
+                <label class="ce-label">开场白设置</label>
+                <div class="ce-rowline">
+                    <input type="text" id="ce_fm_char" class="text_pole" placeholder="给谁写（留空用当前角色卡）">
+                    <select id="ce_fm_view" class="text_pole">
+                        <option value="second" selected>第二人称</option>
+                        <option value="first">第一人称</option>
+                        <option value="third">第三人称</option>
+                    </select>
+                </div>
+                <textarea id="ce_fm_scene" class="text_pole" rows="2" placeholder="开场情境（留空由 AI 自拟）"></textarea>
+                <div class="ce-rowline">
+                    <label class="checkbox_label"><input type="checkbox" id="ce_fm_use_novel" checked> 结合世界观与文风</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_fm_nsfw"> 含 NSFW</label>
+                </div>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_fm_run">生成开场白</button>
+                    <span id="ce_fm_msg" class="ce-msg"></span>
+                </div>
             </div>
-            <textarea id="ce_fm_scene" class="text_pole" rows="2" placeholder="开场情境（留空由 AI 自拟）"></textarea>
-            <div class="ce-rowline">
-                <label class="checkbox_label"><input type="checkbox" id="ce_fm_use_novel" checked> 结合世界观与文风</label>
-                <label class="checkbox_label"><input type="checkbox" id="ce_fm_nsfw"> 含 NSFW</label>
+            <div class="ce-section">
+                <label class="ce-label">生成结果</label>
+                <textarea id="ce_fm_out" class="text_pole" rows="10" placeholder="生成的开场白会显示在这里…"></textarea>
+                <div class="ce-rowline"><button type="button" class="menu_button" id="ce_fm_copy">复制</button></div>
             </div>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_fm_run">生成开场白</button>
-                <span id="ce_fm_msg" class="ce-msg"></span>
-            </div>
-            <textarea id="ce_fm_out" class="text_pole" rows="10" placeholder="生成的开场白会显示在这里…"></textarea>
-            <div class="ce-rowline"><button type="button" class="menu_button" id="ce_fm_copy">复制</button></div>
         </div>`;
 
     $('ce_fm_out').value = state.firstText;
@@ -395,12 +419,18 @@ export function renderCheckTab(box) {
 
     box.innerHTML = `
         <div class="ce-pane">
-            <div class="ce-rowline"><button type="button" class="menu_button" id="ce_check_run">开始自检</button>
-                <span id="ce_check_msg" class="ce-msg"></span></div>
-            <div class="ce-checklist" id="ce_checklist">${listHtml}</div>
-            <div class="ce-log" id="ce_check_log"></div>
-            <textarea id="ce_check_out" class="text_pole" rows="12" placeholder="自检结果会显示在这里…"></textarea>
-            <div class="ce-rowline"><button type="button" class="menu_button" id="ce_check_copy">复制</button></div>
+            <div class="ce-section">
+                <label class="ce-label">选择检查项</label>
+                <div class="ce-rowline"><button type="button" class="menu_button" id="ce_check_run">开始自检</button>
+                    <span id="ce_check_msg" class="ce-msg"></span></div>
+                <div class="ce-checklist" id="ce_checklist">${listHtml}</div>
+                <div class="ce-log" id="ce_check_log"></div>
+            </div>
+            <div class="ce-section">
+                <label class="ce-label">自检结果</label>
+                <textarea id="ce_check_out" class="text_pole" rows="12" placeholder="自检结果会显示在这里…"></textarea>
+                <div class="ce-rowline"><button type="button" class="menu_button" id="ce_check_copy">复制</button></div>
+            </div>
         </div>`;
 
     $('ce_check_run').addEventListener('click', async () => {
@@ -452,11 +482,14 @@ export function renderHistoryTab(box, rerender) {
 
     box.innerHTML = `
         <div class="ce-pane">
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_hist_clear">清空全部</button>
-                <span id="ce_hist_msg" class="ce-msg"></span>
+            <div class="ce-section">
+                <label class="ce-label">历史记录</label>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_hist_clear">清空全部</button>
+                    <span id="ce_hist_msg" class="ce-msg"></span>
+                </div>
+                <div class="ce-histlist">${listHtml}</div>
             </div>
-            <div class="ce-histlist">${listHtml}</div>
         </div>`;
 
     box.querySelectorAll('.ce_hist_view').forEach((btn) => {

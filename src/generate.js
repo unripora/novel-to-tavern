@@ -87,8 +87,9 @@ export async function generate(prompt, {
     useStream = false, signal, onText, onWait, maxCont = 0, logEl, label, maxTokens, onDiag,
 } = {}) {
     const s = settings();
-    // max_tokens 的取值：显式传入 > 设置里的「不限」> 设置里的数值
-    const mt = (maxTokens != null) ? maxTokens : (s.respUnlimited ? 'unset' : s.maxTokens);
+    // 输出上限取值：
+    //   显示传入 > 「使用酒馆全局设置」时用 'unset'（=不改酒馆） > 用插件自定义 maxTokens
+    const mt = (maxTokens != null) ? maxTokens : (s.useGlobalResp ? 'unset' : s.maxTokens);
     // 长度判据用「数值」形式（'unset' 时不做长度判定，仅靠结构判定）
     const mtNum = (typeof mt === 'number') ? mt : 0;
     // 诊断回调：写控制台 + 面板日志区

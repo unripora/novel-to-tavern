@@ -12,18 +12,27 @@ import { $, state, escapeHtml, stopRun } from './ui-context.js';
 export function renderCharsTab(box) {
     box.innerHTML = `
         <div class="ce-pane">
-            <div class="ce-rowline">
-                <input type="text" id="ce_manual" class="text_pole" placeholder="手动添加角色，多个用逗号/空格分隔">
-                <button type="button" class="menu_button" id="ce_add_names">添加</button>
+            <div class="ce-section">
+                <label class="ce-label">添加角色</label>
+                <div class="ce-rowline">
+                    <input type="text" id="ce_manual" class="text_pole" style="flex:1" placeholder="手动添加角色，多个用逗号/空格分隔">
+                    <button type="button" class="menu_button" id="ce_add_names">添加</button>
+                </div>
             </div>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_scan">扫描全书</button>
-                <button type="button" class="menu_button" id="ce_merge">合并所选</button>
-                <button type="button" class="menu_button" id="ce_clear_chars">清空列表</button>
-                <span id="ce_scan_msg" class="ce-msg"></span>
+            <div class="ce-section">
+                <label class="ce-label">扫描与操作</label>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_scan">扫描全书</button>
+                    <button type="button" class="menu_button" id="ce_merge">合并所选</button>
+                    <button type="button" class="menu_button" id="ce_clear_chars">清空列表</button>
+                    <span id="ce_scan_msg" class="ce-msg"></span>
+                </div>
+                <div class="ce-log" id="ce_scan_log"></div>
             </div>
-            <div class="ce-charlist" id="ce_charlist"></div>
-            <div class="ce-log" id="ce_scan_log"></div>
+            <div class="ce-section">
+                <label class="ce-label">角色列表（点击选择，用于生成）</label>
+                <div class="ce-charlist" id="ce_charlist"></div>
+            </div>
         </div>`;
 
     renderCharChips();

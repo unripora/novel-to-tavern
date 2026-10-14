@@ -34,8 +34,19 @@ function bindSettings() {
     }
     const think = $('ce_show_think');
     if (think) think.checked = !!s.showThink;
-    const unlimited = $('ce_resp_unlimited');
-    if (unlimited) unlimited.checked = !!s.respUnlimited;
+    const useGlobal = $('ce_use_global_resp');
+    const customBox = $('ce_custom_resp_box');
+    if (useGlobal) useGlobal.checked = !!s.useGlobalResp;
+    // 勾选「使用酒馆全局设置」时隐藏自定义输入框
+    const syncRespBox = () => {
+        if (customBox) customBox.style.display = (useGlobal && useGlobal.checked) ? 'none' : 'block';
+    };
+    syncRespBox();
+    if (useGlobal) useGlobal.addEventListener('change', () => {
+        s.useGlobalResp = useGlobal.checked;
+        persist();
+        syncRespBox();
+    });
     const autoCont = $('ce_auto_cont');
     if (autoCont) autoCont.checked = !!s.autoCont;
 
@@ -49,7 +60,7 @@ function bindSettings() {
                 s[key] = el.type === 'number' ? Number(el.value) : el.value;
             }
             if (think) s.showThink = think.checked;
-            if (unlimited) s.respUnlimited = unlimited.checked;
+            if (useGlobal) s.useGlobalResp = useGlobal.checked;
             if (autoCont) s.autoCont = autoCont.checked;
             persist();
             flash('ce_settings_msg', '已保存', false);
@@ -144,20 +155,22 @@ const SETTINGS_HTML = `
             </div>
             <div class="ce-section">
                 <label class="ce-label">生成参数</label>
-                <div class="ce-grid">
-                    <div class="ce-field">
-                        <span>插件内输出上限（tokens）</span>
-                        <input type="number" id="ce_max_tokens" class="text_pole" step="500" min="256">
+                <label class="checkbox_label">
+                    <input type="checkbox" id="ce_use_global_resp">
+                    <span>使用酒馆全局设置</span>
+                </label>
+                <div id="ce_custom_resp_box">
+                    <p class="ce-hint" style="margin:4px 0 8px">
+                        未勾选时，插件会在生成时**临时**把酒馆的响应长度设为下面的值，生成后立即还原，
+                        因此不受酒馆「最大回复长度」滑块限制，也不影响酒馆正常对话。
+                    </p>
+                    <div class="ce-grid">
+                        <div class="ce-field">
+                            <span>插件内输出上限（tokens）</span>
+                            <input type="number" id="ce_max_tokens" class="text_pole" step="500" min="256">
+                        </div>
                     </div>
                 </div>
-                <p class="ce-hint" style="margin:4px 0 8px">
-                    插件会在生成时**临时**把酒馆的响应长度设为上面的值，生成后立即还原。
-                    因此不受酒馆「最大回复长度」滑块限制，也不影响酒馆正常对话。
-                </p>
-                <label class="checkbox_label">
-                    <input type="checkbox" id="ce_resp_unlimited">
-                    <span>不覆盖酒馆设置（直接用酒馆自身的响应长度）</span>
-                </label>
                 <label class="checkbox_label">
                     <input type="checkbox" id="ce_auto_cont">
                     <span>截断时自动续写补全</span>

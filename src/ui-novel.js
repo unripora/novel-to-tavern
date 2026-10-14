@@ -10,30 +10,36 @@ import { $, state } from './ui-context.js';
 export function renderNovelTab(box) {
     box.innerHTML = `
         <div class="ce-pane">
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_pick_btn">
-                    <i class="fa-solid fa-file-import"></i> 选择文件导入
-                </button>
-                <button type="button" class="menu_button" id="ce_novel_list">刷新记录</button>
-                <input type="file" id="ce_file" accept=".txt,.text,.md,text/plain" style="display:none">
+            <div class="ce-section">
+                <label class="ce-label">导入小说正文</label>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_pick_btn">
+                        <i class="fa-solid fa-file-import"></i> 选择文件导入
+                    </button>
+                    <button type="button" class="menu_button" id="ce_novel_list">刷新记录</button>
+                    <input type="file" id="ce_file" accept=".txt,.text,.md,text/plain" style="display:none">
+                </div>
+                <div class="ce-dropzone" id="ce_dropzone">
+                    <textarea id="ce_novel_text" class="text_pole" rows="8"
+                        placeholder="在此粘贴小说正文，或把 .txt 文件拖到这里…"></textarea>
+                    <div class="ce-drop-hint" id="ce_drop_hint">松开鼠标即可导入 .txt 文件</div>
+                </div>
+                <div class="ce-meta"><span id="ce_novel_stat">0 字</span> <span id="ce_novel_msg" class="ce-msg"></span></div>
+                <div class="ce-prog" id="ce_load_prog" style="display:none"><div class="ce-prog-bar" id="ce_load_bar"></div></div>
             </div>
-            <div class="ce-dropzone" id="ce_dropzone">
-                <textarea id="ce_novel_text" class="text_pole" rows="8"
-                    placeholder="在此粘贴小说正文，或把 .txt 文件拖到这里…"></textarea>
-                <div class="ce-drop-hint" id="ce_drop_hint">松开鼠标即可导入 .txt 文件</div>
+            <div class="ce-section">
+                <label class="ce-label">已保存的记录</label>
+                <div class="ce-rowline">
+                    <select id="ce_novel_sel" class="text_pole" style="flex:1"></select>
+                    <button type="button" class="menu_button" id="ce_novel_load">载入</button>
+                    <button type="button" class="menu_button" id="ce_novel_save">保存当前</button>
+                    <button type="button" class="menu_button" id="ce_novel_del">删除</button>
+                </div>
+                <p class="ce-tip">提示：导入后会自动保存到酒馆扩展存储（IndexedDB），刷新/重启不丢失。也可把文件直接拖到上方文本框。</p>
+                <p class="ce-warn" id="ce_store_warn" style="display:none">
+                    ⚠ 未检测到酒馆持久存储（localforage），当前数据仅存内存，刷新会丢失。
+                </p>
             </div>
-            <div class="ce-meta"><span id="ce_novel_stat">0 字</span> <span id="ce_novel_msg" class="ce-msg"></span></div>
-            <div class="ce-prog" id="ce_load_prog" style="display:none"><div class="ce-prog-bar" id="ce_load_bar"></div></div>
-            <div class="ce-rowline">
-                <select id="ce_novel_sel" class="text_pole"></select>
-                <button type="button" class="menu_button" id="ce_novel_load">载入</button>
-                <button type="button" class="menu_button" id="ce_novel_save">保存当前</button>
-                <button type="button" class="menu_button" id="ce_novel_del">删除</button>
-            </div>
-            <p class="ce-tip">提示：导入后会自动保存到酒馆扩展存储（IndexedDB），刷新/重启不丢失。也可把文件直接拖到上方文本框。</p>
-            <p class="ce-warn" id="ce_store_warn" style="display:none">
-                ⚠ 未检测到酒馆持久存储（localforage），当前数据仅存内存，刷新会丢失。
-            </p>
         </div>`;
 
     const ta = $('ce_novel_text');

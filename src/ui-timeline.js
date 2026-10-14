@@ -20,11 +20,14 @@ export function renderTimelineTab(box) {
     box.innerHTML = `
         <div class="ce-pane">
             <p class="ce-tip">时间线把作品按篇章/阶段切开。生成角色卡时可限定在某个篇章内检索，避免年龄、事件、世界观串线。</p>
-            <div class="ce-rowline">
-                <button type="button" class="menu_button" id="ce_tl_divide">AI 自动划分</button>
-                <button type="button" class="menu_button" id="ce_tl_add">手动添加</button>
-                <button type="button" class="menu_button" id="ce_tl_lock">${locked ? '解除锁定' : '锁定时间线'}</button>
-                <span id="ce_tl_msg" class="ce-msg ${locked ? 'ok' : ''}">${locked ? '已锁定' : ''}</span>
+            <div class="ce-section">
+                <label class="ce-label">划分与锁定</label>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_tl_divide">AI 自动划分</button>
+                    <button type="button" class="menu_button" id="ce_tl_add">手动添加</button>
+                    <button type="button" class="menu_button" id="ce_tl_lock">${locked ? '解除锁定' : '锁定时间线'}</button>
+                    <span id="ce_tl_msg" class="ce-msg ${locked ? 'ok' : ''}">${locked ? '已锁定' : ''}</span>
+                </div>
             </div>
             <div class="ce-section">
                 <label class="ce-label">按事件名划分（在正文中检索事件位置作为篇章起点）</label>
@@ -51,8 +54,11 @@ export function renderTimelineTab(box) {
                     <span class="ce-faint">篇章顺序以梗概为准；先模糊检索篇名与卷标志行，未命中的交给 AI 结合参考文档细化边界</span>
                 </div>
             </div>
-            <div class="ce-log" id="ce_tl_log"></div>
-            <div class="ce-tl-list" id="ce_tl_list">${rows}</div>
+            <div class="ce-section">
+                <label class="ce-label">篇章列表（可编辑校对）</label>
+                <div class="ce-log" id="ce_tl_log"></div>
+                <div class="ce-tl-list" id="ce_tl_list">${rows}</div>
+            </div>
         </div>`;
 
     bindRowEvents(textLen);
