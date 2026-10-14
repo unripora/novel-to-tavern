@@ -166,7 +166,11 @@
     left: 50%;
     transform: translate(-50%, -50%);
     width: min(1000px, 94vw);
+    /* 用 dvh（动态视口高度）适配移动端地址栏；回退 vh 供旧浏览器 */
     height: min(760px, 92vh);
+    height: min(760px, 92dvh);
+    max-height: 92vh;
+    max-height: 92dvh;
     display: flex;
     flex-direction: column;
     background: var(--ce-bg, #16181f);
@@ -175,6 +179,24 @@
     border-radius: 14px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, .5);
     overflow: hidden;
+}
+
+/* 移动端（窄屏）：面板铺满可视区、圆角收紧、字号略小 */
+@media (max-width: 640px) {
+    .ce-modal-body {
+        width: 100vw;
+        height: 100dvh;
+        max-height: 100dvh;
+        border-radius: 0;
+        top: 0;
+        left: 0;
+        transform: none;
+    }
+    .ce-modal-head { padding: 10px 12px; font-size: 14px; }
+    .ce-modal-tabs { padding: 8px 10px; gap: 3px; }
+    .ce-tab { padding: 5px 9px; font-size: 12px; }
+    .ce-modal-content { padding: 12px; }
+    .ce-modal .ce-pane .menu_button { padding: 6px 12px !important; }
 }
 
 .ce-modal-head {

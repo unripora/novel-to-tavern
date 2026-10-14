@@ -50,25 +50,25 @@ export async function aiRaw(prompt, opts = {}) {
     if (opts.maxTokens != null) objArgs.max_tokens = opts.maxTokens;
     try {
         const out = await c.generateRaw(objArgs);
-        diag('A 对象形式成功', objArgs.max_tokens, out);
+        diag(opts, 'A 对象形式成功', objArgs.max_tokens, out);
         return extractText(out);
     } catch (eA) {
-        diag('A 对象形式失败', objArgs.max_tokens, eA);
+        diag(opts, 'A 对象形式失败', objArgs.max_tokens, eA);
         // 对象形式失败，继续尝试其它签名（不要把致命错误吞掉：最后会重抛）
         // —— 方案 B：位置参数形式（原生酒馆）——
         try {
             const out = await c.generateRaw(prompt);
-            diag('B 位置参数成功', '(无 max_tokens)', out);
+            diag(opts, 'B 位置参数成功', '(无 max_tokens)', out);
             return extractText(out);
         } catch (eB) {
-            diag('B 位置参数失败', '', eB);
+            diag(opts, 'B 位置参数失败', '', eB);
             // —— 方案 C：回退到最简对象形式（不带 max_tokens / onDelta）——
             try {
                 const out = await c.generateRaw({ prompt });
-                diag('C 最简对象成功', '(无 max_tokens)', out);
+                diag(opts, 'C 最简对象成功', '(无 max_tokens)', out);
                 return extractText(out);
             } catch (eC) {
-                diag('C 最简对象失败', '', eC);
+                diag(opts, 'C 最简对象失败', '', eC);
                 // 三种都失败：抛出首个错误，便于定位
                 throw eA;
             }
@@ -76,17 +76,19 @@ export async function aiRaw(prompt, opts = {}) {
     }
 }
 
-/** 诊断输出（打开浏览器控制台即可看到；不影响功能） */
-function diag(step, mt, payload) {
+/** 诊断输出：写控制台 + 可选回调（面板日志区），不影响功能 */
+function diag(opts, step, mt, payload) {
+    let msg;
     try {
         if (payload instanceof Error) {
-            console.warn('[card-extractor][aiRaw]', step, '| max_tokens =', mt, '| 错误:', payload.message);
+            msg = step + ' | max_tokens=' + mt + ' | 错误: ' + payload.message;
         } else {
             const text = extractText(payload);
-            console.log('[card-extractor][aiRaw]', step, '| max_tokens =', mt,
-                '| 返回类型:', typeof payload, '| 文本长度:', text.length,
-                '| 结尾:', JSON.stringify(text.slice(-24)));
+            msg = step + ' | max_tokens=' + mt + ' | 返回类型:' + typeof payload +
+                ' | 文本长度:' + text.length + ' | 结尾:' + JSON.stringify(text.slice(-20));
         }
+        console.log('[card-extractor][aiRaw]', msg);
+        if (opts && typeof opts.onDiag === 'function') opts.onDiag(msg, payload instanceof Error);
     } catch (e) { /* 诊断不影响主流程 */ }
 }
 

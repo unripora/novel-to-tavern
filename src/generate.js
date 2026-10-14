@@ -39,13 +39,13 @@ export function isAbort(e, signal) {
  * @param {string|Array} prompt
  * @param {{signal?:AbortSignal, onWait?:Function, tries?:number, maxTokens?:number|string}} opts
  */
-export async function chat(prompt, { signal, onWait, tries = 3, maxTokens } = {}) {
+export async function chat(prompt, { signal, onWait, tries = 3, maxTokens, onDiag } = {}) {
     let attempt = 0;
     // 通过酒馆接口生成；不再抛 HTTP 状态码，重试针对网络/临时错误
     while (true) {
         attempt++;
         try {
-            const out = await aiRaw(prompt, { signal, maxTokens });
+            const out = await aiRaw(prompt, { signal, maxTokens, onDiag });
             lastFinish = '';
             return out ?? '';
         } catch (e) {
@@ -59,12 +59,12 @@ export async function chat(prompt, { signal, onWait, tries = 3, maxTokens } = {}
 }
 
 /** 带重试的流式生成 */
-export async function chatStream(prompt, { signal, onDelta, onWait, tries = 3, maxTokens } = {}) {
+export async function chatStream(prompt, { signal, onDelta, onWait, tries = 3, maxTokens, onDiag } = {}) {
     let attempt = 0;
     while (true) {
         attempt++;
         try {
-            const out = await aiRaw(prompt, { signal, onDelta, maxTokens });
+            const out = await aiRaw(prompt, { signal, onDelta, maxTokens, onDiag });
             lastFinish = '';
             return out ?? '';
         } catch (e) {
@@ -84,13 +84,18 @@ export async function chatStream(prompt, { signal, onDelta, onWait, tries = 3, m
  *   maxTokens：传给酒馆的 max_tokens（数字；不传则用设置里的 maxTokens）
  */
 export async function generate(prompt, {
-    useStream = false, signal, onText, onWait, maxCont = 0, logEl, label, maxTokens,
+    useStream = false, signal, onText, onWait, maxCont = 0, logEl, label, maxTokens, onDiag,
 } = {}) {
     const s = settings();
     // max_tokens 的取值：显式传入 > 设置里的「不限」> 设置里的数值
     const mt = (maxTokens != null) ? maxTokens : (s.respUnlimited ? 'unset' : s.maxTokens);
     // 长度判据用「数值」形式（'unset' 时不做长度判定，仅靠结构判定）
     const mtNum = (typeof mt === 'number') ? mt : 0;
+    // 诊断回调：写控制台 + 面板日志区
+    const diagCb = (msg, isErr) => {
+        if (onDiag) { try { onDiag(msg, isErr); } catch (e) { /* ignore */ } }
+        if (logEl) logTo(logEl, (label ? label + ' · ' : '') + '[调用] ' + msg, isErr ? 'e' : '');
+    };
     let full = '';
     for (let round = 0; round <= maxCont; round++) {
         let part = '';
@@ -99,13 +104,13 @@ export async function generate(prompt, {
             : appendContinue(prompt, full);
         if (useStream) {
             try {
-                part = await chatStream(p, { signal, onDelta: (f) => { onText && onText(full + f); }, onWait, maxTokens: mt });
+                part = await chatStream(p, { signal, onDelta: (f) => { onText && onText(full + f); }, onWait, maxTokens: mt, onDiag: diagCb });
             } catch (err) {
                 if (isAbort(err, signal)) throw err;
-                part = await chat(p, { signal, onWait, maxTokens: mt });
+                part = await chat(p, { signal, onWait, maxTokens: mt, onDiag: diagCb });
             }
         } else {
-            part = await chat(p, { signal, onWait, maxTokens: mt });
+            part = await chat(p, { signal, onWait, maxTokens: mt, onDiag: diagCb });
         }
         full += part;
         onText && onText(full);
@@ -113,8 +118,10 @@ export async function generate(prompt, {
         // 注意：长度判据只看本轮输出（续写后 full 必然更长，用 full 会误判）
         const t1 = detectTruncated(part, mtNum);
         const t2 = looksTruncated(full);
-        console.log('[card-extractor][generate]', label || '', '本轮长度:', part.length,
-            '| max_tokens =', mt, '| 截断判定: length/结构=', t1, '| 全文结构=', t2, '| 轮次:', round + '/' + maxCont);
+        const diagMsg = '本轮长度:' + part.length + ' | max_tokens=' + mt +
+            ' | 截断判定: 结构=' + t1 + ' 全文=' + t2 + ' | 轮次 ' + (round + 1) + '/' + (maxCont + 1);
+        console.log('[card-extractor][generate]', label || '', diagMsg);
+        if (logEl) logTo(logEl, (label ? label + ' ' : '') + diagMsg, (t1 || t2) ? 'w' : '');
         if (!t1 && !t2) break;
         if (round >= maxCont) break;
         if (logEl) logTo(logEl, (label ? label + ' ' : '') + '检测到截断，自动续写（第 ' + (round + 1) + ' 次）…', 'w');

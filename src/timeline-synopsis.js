@@ -150,7 +150,7 @@ export async function normalizeSynopsisText(raw, { signal } = {}) {
     const out = await generate([
         { role: 'system', content: '你是严谨的文本整理助手，只做格式规范化：保持篇章顺序、只剔除纯分类的大类标题，绝不改动剧情内容、不合并、不重新划分。' },
         { role: 'user', content: prompt },
-    ], { signal, useStream: false, maxCont: 3 });
+    ], { signal, useStream: false, maxCont: 3, logEl: 'ce_tl_log', label: '梗概优化' });
     const text = stripThink(stripFence(out)).trim();
     if (!text) throw new Error('AI 未返回内容，请重试');
     return text;
