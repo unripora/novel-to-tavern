@@ -37,6 +37,10 @@ export function renderTimelineTab(box) {
             </div>
             <div class="ce-section">
                 <label class="ce-label">按故事梗概划分（粘贴梗概，自动识别篇章结构）</label>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_tl_syn_norm">AI 优化梗概</button>
+                    <span class="ce-faint">把不规范的梗概整理成标准格式（篇名干净、顺序不变、自动去掉「另一本书」的部分）</span>
+                </div>
                 <textarea id="ce_tl_synopsis" class="text_pole ce-synopsis" rows="6"
                     placeholder="粘贴作品梗概，例如：&#10;## 1. 艾恩葛朗特篇&#10;2022 年万人被困死亡游戏 SAO……&#10;## 2. 妖精之舞篇&#10;SAO 通关，亚丝娜仍被困在 ALO……"></textarea>
                 <label class="ce-label">参考文档（可选：作品目录 / 设定资料 / 篇章简介）</label>
@@ -56,6 +60,7 @@ export function renderTimelineTab(box) {
 
     $('ce_tl_divide').addEventListener('click', doDivide);
     $('ce_tl_ev_run').addEventListener('click', doDivideByEvents);
+    $('ce_tl_syn_norm').addEventListener('click', doNormalizeSynopsis);
     $('ce_tl_syn_run').addEventListener('click', doDivideBySynopsis);
     $('ce_tl_add').addEventListener('click', () => {
         const tl2 = timeline.getTimeline();
@@ -148,6 +153,31 @@ function doDivideByEvents() {
         rerender('timeline');
     } catch (e) {
         flash('ce_tl_msg', '失败：' + e.message, true);
+    }
+}
+
+/** AI 优化梗概：整理成标准格式后回填输入框 */
+async function doNormalizeSynopsis() {
+    const ta = $('ce_tl_synopsis');
+    const raw = ta.value.trim();
+    if (!raw) { flash('ce_tl_msg', '请先粘贴故事梗概', true); return; }
+    const btn = $('ce_tl_syn_norm');
+    btn.disabled = true;
+    clearLog('ce_tl_log');
+    flash('ce_tl_msg', 'AI 优化中…');
+    logTo('ce_tl_log', '正在把梗概整理成标准格式…');
+    try {
+        const text = await timeline.normalizeSynopsisText(raw);
+        ta.value = text;
+        settings().tlSynopsis = text;
+        persist();
+        flash('ce_tl_msg', '优化完成，请检查后点「梗概划分」');
+        logTo('ce_tl_log', '优化完成', 'g');
+    } catch (e) {
+        flash('ce_tl_msg', '优化失败：' + e.message, true);
+        logTo('ce_tl_log', '优化失败：' + e.message, 'e');
+    } finally {
+        btn.disabled = false;
     }
 }
 

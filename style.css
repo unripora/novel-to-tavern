@@ -44,6 +44,23 @@
     padding: 6px 14px;
 }
 
+/* 设置面板里的按钮：同样描边胶囊，明确可点 */
+.ce-settings .menu_button {
+    border: 1px solid #c8a86b !important;
+    background: rgba(200, 168, 107, .16) !important;
+    border-radius: 999px !important;
+    padding: 6px 16px !important;
+    color: #f0dcae !important;
+    font-weight: 600 !important;
+    transition: background .15s, border-color .15s;
+}
+
+.ce-settings .menu_button:hover {
+    background: rgba(200, 168, 107, .32) !important;
+    border-color: #e0c489 !important;
+    color: #fff !important;
+}
+
 /* 设置面板里的主按钮独占一行、撑满宽度 */
 .ce-settings .ce-btnrow > #ce_open_panel,
 .ce-settings .ce-btnrow > #ce_save_settings {
@@ -245,22 +262,31 @@
     line-height: 1.3;
 }
 
-/* 按钮：描边胶囊，明确「这是可点的」 */
-.ce-modal .ce-pane .menu_button {
-    border: 1px solid rgba(200, 168, 107, .55);
-    background: rgba(200, 168, 107, .1);
-    border-radius: 999px;
-    padding: 5px 14px;
-    color: #e7e7ec;
+/* 按钮：描边胶囊，明确「这是可点的」（用 !important 覆盖酒馆主题） */
+.ce-modal .ce-pane .menu_button,
+.ce-modal .ce-pane .menu_button.menu_button {
+    border: 1px solid #c8a86b !important;
+    background: rgba(200, 168, 107, .16) !important;
+    border-radius: 999px !important;
+    padding: 6px 16px !important;
+    color: #f0dcae !important;
+    font-weight: 600 !important;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, .25);
     transition: background .15s, border-color .15s, transform .05s;
 }
 
 .ce-modal .ce-pane .menu_button:hover {
-    background: rgba(200, 168, 107, .22);
-    border-color: #c8a86b;
+    background: rgba(200, 168, 107, .32) !important;
+    border-color: #e0c489 !important;
+    color: #fff !important;
 }
 
 .ce-modal .ce-pane .menu_button:active { transform: translateY(1px); }
+
+.ce-modal .ce-pane .menu_button:disabled {
+    opacity: .45 !important;
+    cursor: not-allowed;
+}
 
 /* 复选框标签：回到中立样式，避免被上面的 label 规则带偏 */
 .ce-pane label.checkbox_label,
