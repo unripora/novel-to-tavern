@@ -5,7 +5,7 @@
  * 正文存 localforage（见 store.js）。
  */
 
-import { novelStore, settings, persist, serverMaybeSave } from './store.js';
+import { novelStore, settings, persist, serverMaybeSave, serverMaybeDel } from './store.js';
 
 const READ_CHUNK = 4 * 1024 * 1024;   // 每次读取 4MB
 const PREVIEW_LIMIT = 200000;          // 预览截断长度
@@ -137,6 +137,8 @@ export async function loadNovelRecord(name) {
 export async function deleteNovelRecord(name) {
     await novelStore.del(name);
     if (getCurrentRecord() === name) setCurrentRecord('');
+    // 同步删除服务器落盘文件（开关关闭 / 插件不可用时内部静默跳过）
+    serverMaybeDel('novel/' + safeFileName(name) + '.txt').catch(() => { });
 }
 
 /** 列出全部记录名 */

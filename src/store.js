@@ -6,7 +6,7 @@
  * - 大文本（小说正文）：存酒馆共享库 localforage（IndexedDB），避免 localStorage 5MB 限制
  */
 
-import { ctx, inTavern, serverAvailable, serverSave } from './st-bridge.js';
+import { ctx, inTavern, serverAvailable, serverSave, serverDel } from './st-bridge.js';
 
 /** 扩展唯一标识（需全局唯一，避免与其他扩展冲突） */
 export const MODULE_NAME = 'card_extractor';
@@ -172,7 +172,19 @@ export async function serverMaybeSave(relPath, content) {
     return !!(res && res.ok);
 }
 
+/**
+ * 条件删除：仅当「开关开启」且「Server Plugin 可用」时，才删除服务器上的落盘文件。
+ * 用于删除记录时同步清理落盘文件，避免产生孤儿文件。
+ * @param {string} relPath 相对落盘根目录的路径
+ * @returns {Promise<boolean>} 是否成功删除
+ */
+export async function serverMaybeDel(relPath) {
+    if (!settings().serverSaveEnabled) return false;
+    if (!(await serverAvailable())) return false;
+    return serverDel(relPath);
+}
+
 /* 说明：serverSave 直接 re-export 供需要「无条件落盘」的场景使用（如手动导出到服务器）。 */
 export { serverSave };
 
-export default { MODULE_NAME, DEFAULT_SETTINGS, settings, persist, novelStore, panelStore, persistentAvailable, serverSave, serverMaybeSave, serverStatus };
+export default { MODULE_NAME, DEFAULT_SETTINGS, settings, persist, novelStore, panelStore, persistentAvailable, serverSave, serverMaybeSave, serverMaybeDel, serverStatus };
