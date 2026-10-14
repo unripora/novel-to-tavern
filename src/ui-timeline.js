@@ -40,7 +40,7 @@ export function renderTimelineTab(box) {
                     placeholder="粘贴作品梗概，例如：&#10;## 1. 艾恩葛朗特篇&#10;2022 年万人被困死亡游戏 SAO……&#10;## 2. 妖精之舞篇&#10;SAO 通关，亚丝娜仍被困在 ALO……"></textarea>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_tl_syn_run">梗概划分</button>
-                    <span class="ce-faint">先按篇名在正文中检索定位，未命中的交给 AI 估算</span>
+                    <span class="ce-faint">先按篇名关键词在正文中模糊检索（含「第X卷」标志行），未命中的交给 AI 重检索</span>
                 </div>
             </div>
             <div class="ce-log" id="ce_tl_log"></div>

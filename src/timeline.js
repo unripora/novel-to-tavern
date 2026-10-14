@@ -236,13 +236,66 @@ export function parseSynopsis(raw) {
 }
 
 /**
+ * 从篇章名中抽取用于检索的关键词
+ *   例：「艾恩葛朗特篇」→「艾恩葛朗特」；「Alicization 篇」→「Alicization」
+ * @param {string} name
+ * @returns {string}
+ */
+export function coreKeyword(name) {
+    let s = String(name || '').trim();
+    s = s.replace(/[（(].*$/, '');                 // 去括号补充
+    s = s.replace(/[篇卷部章季]$/, '').trim();      // 去结尾的「篇/卷/部/章/季」
+    return s || String(name || '').trim();
+}
+
+/**
+ * 在正文中模糊检索一个关键词的「分界位置」
+ *
+ * 策略（按优先级）：
+ *   1. 卷标志行：正文形如「第X卷 关键词 …」的标志行（取**最早**一处的行首位置）
+ *      —— 优先于散落提及，因为标志行才是篇章真正的起点
+ *   2. 反向包含：正文里「第X卷 <卷名>」标志行，卷名与关键词互相包含
+ *   3. 精确包含：正文含关键词本身（兜底，可能命中正文中间的散落提及）
+ *
+ * @param {string} text 正文
+ * @param {string} kw   关键词
+ * @returns {{pos:number, hit:string}|null}
+ */
+export function fuzzyFind(text, kw) {
+    if (!kw) return null;
+
+    // ① 「第X卷 关键词」标志行（取最早一处）
+    const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const reVol = new RegExp('^第[0-9一二三四五六七八九十百]+卷\\s*' + esc, 'gm');
+    const m = reVol.exec(text);
+    if (m) return { pos: m.index, hit: m[0] };
+
+    // ② 反向：正文里的「第X卷 <卷名>」标志行，卷名与关键词互相包含
+    const reAnyVol = /^第[0-9一二三四五六七八九十百]+卷\s+(\S+)/gm;
+    let mm;
+    while ((mm = reAnyVol.exec(text)) !== null) {
+        const volName = (mm[1] || '').trim();
+        if (volName && (volName.includes(kw) || kw.includes(volName))) {
+            return { pos: mm.index, hit: mm[0] };
+        }
+    }
+
+    // ③ 精确包含（兜底）
+    const p0 = text.indexOf(kw);
+    if (p0 >= 0) return { pos: p0, hit: kw };
+
+    return null;
+}
+
+/**
  * 按「故事梗概」划分篇章
  *
  * 流程：
  *   1. 解析梗概得到篇章清单（篇名 + 概述）
- *   2. 篇名检索：在正文中查找篇名，命中则用首次出现位置作为分界起点
- *   3. AI 微调：对未命中的篇章，把抽样正文与篇章清单交给 AI，请它给出各篇章的起始占比
- *   4. 未命中且 AI 也未覆盖的，按顺序均分兜底
+ *   2. 模糊检索：从篇名抽关键词，在正文中模糊定位（精确包含 → 第X卷标志行 → 反向包含）
+ *   3. AI 重检索：仍未命中的篇章，请 AI 依据梗概与抽样正文给出「正文中可检索的关键词」，
+ *      再用关键词回到正文模糊检索（比直接要占比更精确）
+ *   4. 按梗概原顺序切分；仅对「完全无位置」的篇章按序插值兜底，不再打乱顺序
  *
  * @param {string} raw 梗概原文
  * @param {{signal?:AbortSignal, onLog?:(msg:string,cls?:string)=>void}} [opts]
@@ -257,80 +310,113 @@ export async function divideBySynopsis(raw, { signal, onLog } = {}) {
     const textLen = text.length;
     const items = parseSynopsis(raw);
     if (!items.length) throw new Error('未能从梗概中解析出篇章，请检查格式（每篇以标题或「1.」开头）');
-    log('梗概解析出 ' + items.length + ' 个篇章，开始在正文中检索篇名…');
+    log('梗概解析出 ' + items.length + ' 个篇章，开始模糊检索篇名…');
 
-    // ① 篇名检索
+    // ① 模糊检索（篇名 → 关键词 → 正文定位）
     const missed = [];
     for (const it of items) {
-        const pos = text.indexOf(it.name);
-        if (pos >= 0) {
-            it.pos = pos;
-            log('篇章「' + it.name + '」命中于 ' + (pos / textLen * 100).toFixed(1) + '%', 'g');
+        it.kw = coreKeyword(it.name);
+        const hit = fuzzyFind(text, it.kw);
+        if (hit) {
+            it.pos = hit.pos;
+            log('篇章「' + it.name + '」命中「' + hit.hit + '」于 ' + (hit.pos / textLen * 100).toFixed(1) + '%', 'g');
         } else {
             missed.push(it.name);
-            log('篇章「' + it.name + '」未在正文中找到，将交由 AI 估算', 'e');
+            log('篇章「' + it.name + '」未命中，将交由 AI 重检索', 'e');
         }
     }
 
-    // ② AI 微调：只要有未命中的篇章，就请求 AI 给出全部篇章的起始占比
+    // ② AI 重检索：让 AI 给出「正文中可检索的关键词」，再回正文模糊检索
     let refined = false;
     if (missed.length) {
         try {
-            log('提交 AI 微调篇章边界…');
+            log('提交 AI 重检索未命中的篇章…');
             const sample = sampleForTimeline(text);
             const prompt = buildSynopsisPrompt(items);
             const rawAi = await generate([
-                { role: 'system', content: '你是精通叙事结构的文学分析师，擅长依据作品梗概定位章节在正文中的大致位置。' },
+                { role: 'system', content: '你是精通叙事结构与文本检索的文学分析师。' },
                 { role: 'user', content: prompt + '\n\n=== 小说内容（抽样）===\n' + sample },
             ], { signal, useStream: false, maxCont: 2 });
 
             const arr = extractJsonArray(stripThink(stripFence(rawAi)));
             if (arr.length) {
-                arr.forEach((it, i) => {
-                    const pct = Number(it.start_pct);
-                    if (Number.isFinite(pct) && items[i] && items[i].pos == null) {
-                        items[i].pos = Math.round(pct * textLen);
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].pos != null) continue;
+                    const kw = String((arr[i] && (arr[i].keyword || arr[i].key || arr[i].name)) || '').trim();
+                    if (!kw) continue;
+                    const hit = fuzzyFind(text, kw);
+                    if (hit) {
+                        items[i].pos = hit.pos;
+                        log('AI 关键词「' + kw + '」命中「' + hit.hit + '」于 ' + (hit.pos / textLen * 100).toFixed(1) + '%', 'g');
                     }
-                });
+                }
                 refined = true;
-                log('AI 已返回各篇章位置估算', 'g');
             }
         } catch (e) {
-            log('AI 微调失败（' + e.message + '），未命中的篇章将按顺序均分', 'e');
+            log('AI 重检索失败（' + e.message + '），未命中的篇章将按顺序插值', 'e');
         }
     }
 
-    // ③ 均分兜底：仍无位置的篇章，按其在清单中的序号插值
-    for (let i = 0; i < items.length; i++) {
-        if (items[i].pos == null) items[i].pos = Math.round(i / items.length * textLen);
-    }
+    // ③ 按「梗概原顺序」切分：保持 items 顺序，仅对无位置者按前后已知位置插值
+    fillMissingPositions(items, textLen);
 
-    // 按位置排序后，相邻两篇章构成正文区间
-    const ordered = items.slice().sort((a, b) => a.pos - b.pos);
-    const nodes = ordered.map((it, i) => normalizeNode({
+    const nodes = items.map((it, i) => normalizeNode({
         name: it.name,
         summary: it.summary,
         start: it.pos,
-        end: (i + 1 < ordered.length) ? ordered[i + 1].pos : textLen,
+        end: (i + 1 < items.length) ? items[i + 1].pos : textLen,
     }, textLen));
 
-    // 首篇章起点归零（若有内容在第一个篇名之前）
+    // 首篇章起点归零（正文开头可能早于第一个标志行）
     if (nodes.length && nodes[0].start > 0) nodes[0].start = 0;
+    // 保证区间单调：后一篇起点不得早于前一篇
+    for (let i = 1; i < nodes.length; i++) {
+        if (nodes[i].start < nodes[i - 1].start) nodes[i].start = nodes[i - 1].start;
+    }
 
-    log('梗概划分完成，共 ' + nodes.length + ' 个篇章' + (missed.length ? '（' + missed.length + ' 个篇章由 AI/均分估算）' : ''), 'g');
+    const fallback = items.filter((it) => it.estimated).length;
+    log('梗概划分完成，共 ' + nodes.length + ' 个篇章' + (fallback ? '（' + fallback + ' 个按顺序插值）' : ''), 'g');
     return { nodes, missed, refined };
 }
 
-/** 梗概划分的 AI 微调提示词 */
+/**
+ * 为缺失位置的篇章按「梗概原顺序」插值
+ * 仅在前后已有已知位置之间线性均分，保持整体顺序不被打乱。
+ */
+function fillMissingPositions(items, textLen) {
+    let prev = 0;
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].pos != null) { prev = items[i].pos; continue; }
+        // 找下一个已知位置
+        let next = textLen;
+        let nextIdx = items.length;
+        for (let j = i + 1; j < items.length; j++) {
+            if (items[j].pos != null) { next = items[j].pos; nextIdx = j; break; }
+        }
+        const gapCount = nextIdx - i + 1;   // 本段未知数 + 1（含终点）
+        let k = 1;
+        for (let j = i; j < nextIdx; j++) {
+            items[j].pos = Math.round(prev + (next - prev) * (k / gapCount));
+            items[j].estimated = true;
+            k++;
+        }
+        i = nextIdx - 1;
+        if (nextIdx < items.length) prev = items[nextIdx].pos;
+    }
+}
+
+/** 梗概划分的 AI 重检索提示词（要求返回可检索关键词） */
 function buildSynopsisPrompt(items) {
     const list = items.map((it, i) =>
         (i + 1) + '. 「' + it.name + '」：' + (it.summary || '（无概述）').replace(/\n+/g, ' ')
     ).join('\n');
     return '下面给出这部小说的**篇章清单**（按剧情先后排列），以及小说的抽样内容。\n' +
-        '请判断每个篇章大致从正文的哪个位置开始，用「起始占比」（0~1 的小数）表示。\n\n' +
+        '请为每个篇章给出一个**能在这部小说正文里直接检索到的关键词**（例如卷名、篇章标题、专有名词），' +
+        '用于在正文中定位该篇章的起始位置。\n' +
+        '关键词要简短、唯一，优先取正文中原样出现的词（如卷名「妖精之舞」）。若无法确定，留空字符串。\n\n' +
         '篇章清单：\n' + list + '\n\n' +
         '只输出 JSON 数组，元素顺序与篇章清单一致，形如：\n' +
-        '[{"start_pct":0.0},{"start_pct":0.25},{"start_pct":0.5}]\n' +
+        '[{"keyword":"艾恩葛朗特"},{"keyword":"妖精之舞"},{"keyword":""}]\n' +
         '不要输出解释、不要代码块。';
 }
 
