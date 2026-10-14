@@ -92,6 +92,37 @@
 .ce-msg.err { color: #e0736a; }
 .ce-msg.ok { color: #8fbf8a; }
 
+/* 小说导入拖放区 */
+.ce-dropzone {
+    position: relative;
+    border: 2px dashed rgba(255, 255, 255, .18);
+    border-radius: 10px;
+    padding: 6px;
+    transition: border-color .15s, background .15s;
+}
+
+.ce-dropzone.ce-drop {
+    border-color: #c8a86b;
+    background: rgba(200, 168, 107, .08);
+}
+
+.ce-dropzone .ce-drop-hint {
+    display: none;
+    text-align: center;
+    font-size: 12px;
+    color: #c8a86b;
+    padding: 4px 0 2px;
+}
+
+.ce-dropzone.ce-drop .ce-drop-hint {
+    display: block;
+}
+
+.ce-dropzone textarea {
+    width: 100%;
+    resize: vertical;
+}
+
 /* ---------- 主操作面板（浮层） ---------- */
 .ce-modal {
     position: fixed;
