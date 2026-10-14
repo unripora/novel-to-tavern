@@ -34,6 +34,15 @@ export function renderTimelineTab(box) {
                 </div>
                 <p class="ce-faint">逻辑同角色检索：正文包含该关键词即命中，取首次出现位置；相邻两事件之间为一个篇章（篇名用后一个事件名）。</p>
             </div>
+            <div class="ce-section">
+                <label class="ce-label">按故事梗概划分（粘贴梗概，自动识别篇章结构）</label>
+                <textarea id="ce_tl_synopsis" class="text_pole ce-synopsis" rows="6"
+                    placeholder="粘贴作品梗概，例如：&#10;## 1. 艾恩葛朗特篇&#10;2022 年万人被困死亡游戏 SAO……&#10;## 2. 妖精之舞篇&#10;SAO 通关，亚丝娜仍被困在 ALO……"></textarea>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_tl_syn_run">梗概划分</button>
+                    <span class="ce-faint">先按篇名在正文中检索定位，未命中的交给 AI 估算</span>
+                </div>
+            </div>
             <div class="ce-log" id="ce_tl_log"></div>
             <div class="ce-tl-list" id="ce_tl_list">${rows}</div>
         </div>`;
@@ -42,6 +51,7 @@ export function renderTimelineTab(box) {
 
     $('ce_tl_divide').addEventListener('click', doDivide);
     $('ce_tl_ev_run').addEventListener('click', doDivideByEvents);
+    $('ce_tl_syn_run').addEventListener('click', doDivideBySynopsis);
     $('ce_tl_add').addEventListener('click', () => {
         const tl2 = timeline.getTimeline();
         tl2.nodes.push(timeline.normalizeNode({ name: '新篇章', start: 0, end: textLen }, textLen));
@@ -118,6 +128,29 @@ function doDivideByEvents() {
         rerender('timeline');
     } catch (e) {
         flash('ce_tl_msg', '失败：' + e.message, true);
+    }
+}
+
+/** 按故事梗概划分 */
+async function doDivideBySynopsis() {
+    const raw = $('ce_tl_synopsis').value.trim();
+    if (!raw) { flash('ce_tl_msg', '请先粘贴故事梗概', true); return; }
+    if (!novel.getNovel().trim()) { flash('ce_tl_msg', '请先导入小说', true); return; }
+    const btn = $('ce_tl_syn_run');
+    btn.disabled = true;
+    clearLog('ce_tl_log');
+    flash('ce_tl_msg', '解析梗概中…');
+    try {
+        const { nodes, missed } = await timeline.divideBySynopsis(raw, {
+            onLog: (m, c) => logTo('ce_tl_log', m, c),
+        });
+        timeline.saveTimeline({ nodes, locked: false });
+        flash('ce_tl_msg', `已按梗概划分 ${nodes.length} 个篇章` + (missed.length ? `，${missed.length} 个由 AI/均分估算` : ''), missed.length > 0);
+        rerender('timeline');
+    } catch (e) {
+        flash('ce_tl_msg', '失败：' + e.message, true);
+    } finally {
+        btn.disabled = false;
     }
 }
 

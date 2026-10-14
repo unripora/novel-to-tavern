@@ -189,6 +189,151 @@ export function divideByEvents(events, { onLog } = {}) {
     return { nodes, missed };
 }
 
+/**
+ * 解析「故事梗概」文本，提取篇章清单
+ *
+ * 支持用户常见的 markdown 梗概格式，如：
+ *   ## 1. 艾恩葛朗特篇（Aincrad / SAO 篇，第 1 卷）
+ *   （正文描述若干行……）
+ *
+ * 解析规则：
+ *   - 以行首的 markdown 标题（# / ## / ###）或以「数字.」「数字、」「数字)」开头的行作为篇章起点
+ *   - 篇章名取标题括号前的部分（去掉序号）
+ *   - 自篇章名起，直到下一个篇章标题之间的所有非空行，拼成该篇章 summary
+ *
+ * @param {string} raw 梗概原文
+ * @returns {Array<{name:string, summary:string}>}
+ */
+export function parseSynopsis(raw) {
+    const lines = String(raw || '').split(/\r?\n/);
+    const items = [];
+    let cur = null;
+
+    const isHeading = (ln) => {
+        const t = ln.trim();
+        if (!t) return false;
+        if (/^#{1,6}\s+/.test(t)) return true;              // markdown 标题
+        if (/^\d+\s*[.、)．]\s*\S/.test(t)) return true;     // 序号行：1. / 1、 / 1)
+        return false;
+    };
+
+    for (const ln of lines) {
+        if (isHeading(ln)) {
+            if (cur) items.push(cur);
+            let name = ln.trim().replace(/^#{1,6}\s+/, '').replace(/^\d+\s*[.、)．]\s*/, '');
+            name = name.replace(/[（(].*$/, '').trim();      // 去掉括号里的补充说明
+            if (!name) name = '篇章' + (items.length + 1);
+            cur = { name, summary: '' };
+        } else if (cur) {
+            const t = ln.trim().replace(/^>\s?/, '');        // 去掉引用块前缀
+            if (t && !/^-{3,}$/.test(t)) {
+                cur.summary += (cur.summary ? '\n' : '') + t;
+            }
+        }
+    }
+    if (cur) items.push(cur);
+    return items;
+}
+
+/**
+ * 按「故事梗概」划分篇章
+ *
+ * 流程：
+ *   1. 解析梗概得到篇章清单（篇名 + 概述）
+ *   2. 篇名检索：在正文中查找篇名，命中则用首次出现位置作为分界起点
+ *   3. AI 微调：对未命中的篇章，把抽样正文与篇章清单交给 AI，请它给出各篇章的起始占比
+ *   4. 未命中且 AI 也未覆盖的，按顺序均分兜底
+ *
+ * @param {string} raw 梗概原文
+ * @param {{signal?:AbortSignal, onLog?:(msg:string,cls?:string)=>void}} [opts]
+ * @returns {Promise<{nodes:Array, missed:string[], refined:boolean}>}
+ */
+export async function divideBySynopsis(raw, { signal, onLog } = {}) {
+    const text = getNovel();
+    if (!text) throw new Error('请先导入小说');
+    if (!String(raw || '').trim()) throw new Error('请先粘贴故事梗概');
+
+    const log = (m, c) => { if (onLog) onLog(m, c); else logTo('ce_tl_log', m, c); };
+    const textLen = text.length;
+    const items = parseSynopsis(raw);
+    if (!items.length) throw new Error('未能从梗概中解析出篇章，请检查格式（每篇以标题或「1.」开头）');
+    log('梗概解析出 ' + items.length + ' 个篇章，开始在正文中检索篇名…');
+
+    // ① 篇名检索
+    const missed = [];
+    for (const it of items) {
+        const pos = text.indexOf(it.name);
+        if (pos >= 0) {
+            it.pos = pos;
+            log('篇章「' + it.name + '」命中于 ' + (pos / textLen * 100).toFixed(1) + '%', 'g');
+        } else {
+            missed.push(it.name);
+            log('篇章「' + it.name + '」未在正文中找到，将交由 AI 估算', 'e');
+        }
+    }
+
+    // ② AI 微调：只要有未命中的篇章，就请求 AI 给出全部篇章的起始占比
+    let refined = false;
+    if (missed.length) {
+        try {
+            log('提交 AI 微调篇章边界…');
+            const sample = sampleForTimeline(text);
+            const prompt = buildSynopsisPrompt(items);
+            const rawAi = await generate([
+                { role: 'system', content: '你是精通叙事结构的文学分析师，擅长依据作品梗概定位章节在正文中的大致位置。' },
+                { role: 'user', content: prompt + '\n\n=== 小说内容（抽样）===\n' + sample },
+            ], { signal, useStream: false, maxCont: 2 });
+
+            const arr = extractJsonArray(stripThink(stripFence(rawAi)));
+            if (arr.length) {
+                arr.forEach((it, i) => {
+                    const pct = Number(it.start_pct);
+                    if (Number.isFinite(pct) && items[i] && items[i].pos == null) {
+                        items[i].pos = Math.round(pct * textLen);
+                    }
+                });
+                refined = true;
+                log('AI 已返回各篇章位置估算', 'g');
+            }
+        } catch (e) {
+            log('AI 微调失败（' + e.message + '），未命中的篇章将按顺序均分', 'e');
+        }
+    }
+
+    // ③ 均分兜底：仍无位置的篇章，按其在清单中的序号插值
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].pos == null) items[i].pos = Math.round(i / items.length * textLen);
+    }
+
+    // 按位置排序后，相邻两篇章构成正文区间
+    const ordered = items.slice().sort((a, b) => a.pos - b.pos);
+    const nodes = ordered.map((it, i) => normalizeNode({
+        name: it.name,
+        summary: it.summary,
+        start: it.pos,
+        end: (i + 1 < ordered.length) ? ordered[i + 1].pos : textLen,
+    }, textLen));
+
+    // 首篇章起点归零（若有内容在第一个篇名之前）
+    if (nodes.length && nodes[0].start > 0) nodes[0].start = 0;
+
+    log('梗概划分完成，共 ' + nodes.length + ' 个篇章' + (missed.length ? '（' + missed.length + ' 个篇章由 AI/均分估算）' : ''), 'g');
+    return { nodes, missed, refined };
+}
+
+/** 梗概划分的 AI 微调提示词 */
+function buildSynopsisPrompt(items) {
+    const list = items.map((it, i) =>
+        (i + 1) + '. 「' + it.name + '」：' + (it.summary || '（无概述）').replace(/\n+/g, ' ')
+    ).join('\n');
+    return '下面给出这部小说的**篇章清单**（按剧情先后排列），以及小说的抽样内容。\n' +
+        '请判断每个篇章大致从正文的哪个位置开始，用「起始占比」（0~1 的小数）表示。\n\n' +
+        '篇章清单：\n' + list + '\n\n' +
+        '只输出 JSON 数组，元素顺序与篇章清单一致，形如：\n' +
+        '[{"start_pct":0.0},{"start_pct":0.25},{"start_pct":0.5}]\n' +
+        '不要输出解释、不要代码块。';
+}
+
 /** 划分用的提示词 */
 function buildDividePrompt() {
     return '下面是一部小说（内容为抽样片段）。请识别它的**篇章 / 阶段结构**——即按剧情发展划分出的若干阶段' +
@@ -251,5 +396,6 @@ export function contextInNode(name, aliases, node, cap = 60000) {
 export default {
     getTimeline, saveTimeline, clearTimeline, isLocked, setLocked,
     normalizeNode, normalizeTimeline, autoDivide, divideByEvents,
+    parseSynopsis, divideBySynopsis,
     nodeText, contextInNode,
 };
