@@ -6,7 +6,7 @@
  */
 
 import { flash } from './util.js';
-import { panelStore } from './store.js';
+import { panelStore, serverMaybeSave } from './store.js';
 
 /** 面板级状态 */
 export const state = {
@@ -31,11 +31,20 @@ const PRODUCT_KEYS = ['cardText', 'personaText', 'firstText', 'styleText', 'wbEn
 /** 日志缓存持久化：仅在生成期间防抖存一次，避免频繁写入 */
 let _logSaveTimer = null;
 
-/** 保存产物到 localforage（大文本，刷新不丢） */
+/** 服务器落盘防抖：产物变动频繁，避免每次输入都请求 */
+let _srvSaveTimer = null;
+
+/** 保存产物到 localforage（大文本，刷新不丢），开关开启时同步落盘到服务器 */
 export function saveProducts() {
     const data = {};
     for (const k of PRODUCT_KEYS) data[k] = state[k];
-    return panelStore.save('products', data).catch(() => { });
+    panelStore.save('products', data).catch(() => { });
+    // 服务器落盘（防抖 1.5s；未开开关 / 未装插件时内部静默跳过）
+    if (_srvSaveTimer) clearTimeout(_srvSaveTimer);
+    _srvSaveTimer = setTimeout(() => {
+        _srvSaveTimer = null;
+        serverMaybeSave('_state/products.json', JSON.stringify(data, null, 2)).catch(() => { });
+    }, 1500);
 }
 
 /** 保存日志缓存（防抖，刷新后回显 AI 调用日志） */

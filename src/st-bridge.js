@@ -258,6 +258,108 @@ export function looksIncomplete(text) {
     return false;
 }
 
+/* ==================== 服务器落盘（Server Plugin） ==================== */
+
+/**
+ * 服务器落盘插件信息。
+ *
+ * 原理：UI 扩展运行在浏览器上下文，无法写服务器磁盘。真正的落盘由酒馆的
+ * Server Plugin（card-extractor-save，运行在 Node 进程）完成，本层只是调用方。
+ * 插件未安装 / 未开启时，这里的所有调用会失败，上层应自动回退到 localforage。
+ */
+const SAVE_PLUGIN_ID = 'card-extractor-save';
+const SAVE_BASE = '/api/plugins/' + SAVE_PLUGIN_ID;
+
+/** 是否具备服务器落盘插件（缓存探测结果） */
+let _saveAvail = null;
+
+/**
+ * 探测服务器落盘插件是否可用（GET /ping）。
+ * @param {boolean} [force] 是否强制重新探测
+ * @returns {Promise<boolean>}
+ */
+export async function serverAvailable(force = false) {
+    if (_saveAvail !== null && !force) return _saveAvail;
+    try {
+        const res = await fetch(SAVE_BASE + '/ping', { method: 'GET' });
+        const data = await res.json();
+        _saveAvail = !!(res.ok && data && data.ok);
+    } catch (e) {
+        _saveAvail = false;
+    }
+    return _saveAvail;
+}
+
+/**
+ * 保存文本到酒馆服务器本地磁盘。
+ * @param {string} relPath 相对落盘根目录的路径，如 'worldbook/ch01.json'
+ * @param {string} content 文本内容
+ * @returns {Promise<{ok:boolean, path?:string, message?:string}>}
+ */
+export async function serverSave(relPath, content) {
+    try {
+        const res = await fetch(SAVE_BASE + '/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: relPath, content: content == null ? '' : String(content) }),
+        });
+        const data = await res.json();
+        return data && typeof data === 'object' ? data : { ok: res.ok };
+    } catch (e) {
+        return { ok: false, message: e.message };
+    }
+}
+
+/**
+ * 列出服务器已落盘的文件。
+ * @param {string} [dir] 相对子目录（省略则列根目录下全部）
+ * @returns {Promise<string[]>} 相对路径列表
+ */
+export async function serverList(dir) {
+    try {
+        const url = SAVE_BASE + '/list' + (dir ? ('?dir=' + encodeURIComponent(dir)) : '');
+        const res = await fetch(url, { method: 'GET' });
+        const data = await res.json();
+        return (data && data.ok && Array.isArray(data.files)) ? data.files : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+/**
+ * 读取服务器落盘的文件内容。
+ * @param {string} relPath
+ * @returns {Promise<string|null>}
+ */
+export async function serverRead(relPath) {
+    try {
+        const res = await fetch(SAVE_BASE + '/read?path=' + encodeURIComponent(relPath), { method: 'GET' });
+        const data = await res.json();
+        return (data && data.ok) ? String(data.content ?? '') : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * 删除服务器落盘的文件。
+ * @param {string} relPath
+ * @returns {Promise<boolean>}
+ */
+export async function serverDel(relPath) {
+    try {
+        const res = await fetch(SAVE_BASE + '/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: relPath }),
+        });
+        const data = await res.json();
+        return !!(data && data.ok);
+    } catch (e) {
+        return false;
+    }
+}
+
 /**
  * 静默生成：借用酒馆的 prompt 构建流程（可选能力）
  * @param {string} quietPrompt
@@ -298,4 +400,5 @@ export function currentCharName() {
 export default {
     ctx, inTavern, hasApi, aiRaw, aiQuiet, substitute,
     currentUserName, currentCharName,
+    serverAvailable, serverSave, serverList, serverRead, serverDel,
 };

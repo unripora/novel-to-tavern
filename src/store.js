@@ -6,7 +6,7 @@
  * - 大文本（小说正文）：存酒馆共享库 localforage（IndexedDB），避免 localStorage 5MB 限制
  */
 
-import { ctx, inTavern } from './st-bridge.js';
+import { ctx, inTavern, serverAvailable, serverSave } from './st-bridge.js';
 
 /** 扩展唯一标识（需全局唯一，避免与其他扩展冲突） */
 export const MODULE_NAME = 'card_extractor';
@@ -43,6 +43,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     tlRefDoc: '',        // 时间线：参考文档草稿
     characters: [],      // 扫描到的角色列表（含别名/次数），刷新不丢
     selectedNames: [],   // 已选角色名（用于生成），刷新不丢
+    // 服务器落盘（依赖 Server Plugin：card-extractor-save）
+    serverSaveEnabled: false, // 是否将产物落盘到酒馆服务器本地磁盘
 });
 
 /** 内存兜底（非酒馆环境或 localforage 不可用时使用） */
@@ -141,4 +143,36 @@ export const panelStore = {
     },
 };
 
-export default { MODULE_NAME, DEFAULT_SETTINGS, settings, persist, novelStore, panelStore, persistentAvailable };
+/* ==================== 服务器落盘策略 ==================== */
+
+/**
+ * 服务器落盘状态：探测 Server Plugin 是否可用。
+ * @param {boolean} [force] 强制重新探测
+ * @returns {Promise<boolean>}
+ */
+export function serverStatus(force = false) {
+    return serverAvailable(force);
+}
+
+/**
+ * 条件落盘：仅当「开关开启」且「Server Plugin 可用」时，才把内容写到服务器磁盘。
+ *
+ * 失败的三种情形都静默返回 false（不抛错、不阻断主流程）：
+ *   ① 开关未开；② 插件未安装/未启用；③ 写入失败。
+ * 调用方据此可回退到 localforage。
+ *
+ * @param {string} relPath 相对落盘根目录的路径，如 'worldbook/ch01.json'
+ * @param {string} content 文本内容
+ * @returns {Promise<boolean>} 是否成功落盘
+ */
+export async function serverMaybeSave(relPath, content) {
+    if (!settings().serverSaveEnabled) return false;
+    if (!(await serverAvailable())) return false;
+    const res = await serverSave(relPath, content);
+    return !!(res && res.ok);
+}
+
+/* 说明：serverSave 直接 re-export 供需要「无条件落盘」的场景使用（如手动导出到服务器）。 */
+export { serverSave };
+
+export default { MODULE_NAME, DEFAULT_SETTINGS, settings, persist, novelStore, panelStore, persistentAvailable, serverSave, serverMaybeSave, serverStatus };
