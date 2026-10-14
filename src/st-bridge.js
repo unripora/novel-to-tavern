@@ -274,6 +274,23 @@ const SAVE_BASE = '/api/plugins/' + SAVE_PLUGIN_ID;
 let _saveAvail = null;
 
 /**
+ * 构造请求头：优先用酒馆的 getRequestHeaders()（携带 X-CSRF-Token 等），
+ * 否则回退到只带 Content-Type。酒馆对 /api/* 的写操作做 CSRF 校验，
+ * 不带 token 会返回 403。
+ * @param {boolean} [json] 是否要声明 JSON 请求体
+ * @returns {Record<string,string>}
+ */
+function saveHeaders(json = false) {
+    const c = ctx();
+    let headers = {};
+    try {
+        if (c && typeof c.getRequestHeaders === 'function') headers = { ...c.getRequestHeaders() };
+    } catch (e) { /* 忽略，回退 */ }
+    if (json) headers['Content-Type'] = 'application/json';
+    return headers;
+}
+
+/**
  * 探测服务器落盘插件是否可用（GET /ping）。
  * @param {boolean} [force] 是否强制重新探测
  * @returns {Promise<boolean>}
@@ -281,7 +298,7 @@ let _saveAvail = null;
 export async function serverAvailable(force = false) {
     if (_saveAvail !== null && !force) return _saveAvail;
     try {
-        const res = await fetch(SAVE_BASE + '/ping', { method: 'GET' });
+        const res = await fetch(SAVE_BASE + '/ping', { method: 'GET', headers: saveHeaders() });
         const data = await res.json();
         _saveAvail = !!(res.ok && data && data.ok);
     } catch (e) {
@@ -300,7 +317,7 @@ export async function serverSave(relPath, content) {
     try {
         const res = await fetch(SAVE_BASE + '/save', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: saveHeaders(true),
             body: JSON.stringify({ path: relPath, content: content == null ? '' : String(content) }),
         });
         const data = await res.json();
@@ -318,7 +335,7 @@ export async function serverSave(relPath, content) {
 export async function serverList(dir) {
     try {
         const url = SAVE_BASE + '/list' + (dir ? ('?dir=' + encodeURIComponent(dir)) : '');
-        const res = await fetch(url, { method: 'GET' });
+        const res = await fetch(url, { method: 'GET', headers: saveHeaders() });
         const data = await res.json();
         return (data && data.ok && Array.isArray(data.files)) ? data.files : [];
     } catch (e) {
@@ -333,7 +350,7 @@ export async function serverList(dir) {
  */
 export async function serverRead(relPath) {
     try {
-        const res = await fetch(SAVE_BASE + '/read?path=' + encodeURIComponent(relPath), { method: 'GET' });
+        const res = await fetch(SAVE_BASE + '/read?path=' + encodeURIComponent(relPath), { method: 'GET', headers: saveHeaders() });
         const data = await res.json();
         return (data && data.ok) ? String(data.content ?? '') : null;
     } catch (e) {
@@ -350,7 +367,7 @@ export async function serverDel(relPath) {
     try {
         const res = await fetch(SAVE_BASE + '/delete', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: saveHeaders(true),
             body: JSON.stringify({ path: relPath }),
         });
         const data = await res.json();
