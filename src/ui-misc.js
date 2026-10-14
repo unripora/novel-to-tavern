@@ -6,7 +6,8 @@
 import { toast, flash, clearLog } from './util.js';
 import { settings, persist } from './store.js';
 import * as extras from './extras.js';
-import { $, state, escapeHtml, copyText, saveProducts } from './ui-context.js';
+import * as persistMod from './persist.js';
+import { $, state, escapeHtml, copyText, saveProducts, downloadText } from './ui-context.js';
 
 /* ============ Tab 4：user 人设 ============ */
 
@@ -270,6 +271,47 @@ function splitCards(text) {
     return out;
 }
 
+/** 备份分区：导出/导入事件绑定 */
+function bindBackupUI() {
+    const exportBtn = $('ce_bk_export');
+    const importBtn = $('ce_bk_import_btn');
+    const fileEl = $('ce_bk_file');
+    if (!exportBtn) return;
+
+    exportBtn.addEventListener('click', async () => {
+        flash('ce_bk_msg', '打包中…', false, { persist: true });
+        try {
+            const json = await persistMod.exportAll();
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            downloadText(json, 'card-extractor-backup-' + stamp + '.json', 'application/json');
+            flash('ce_bk_msg', '已导出备份文件');
+        } catch (e) {
+            flash('ce_bk_msg', '导出失败：' + e.message, true);
+        }
+    });
+
+    importBtn.addEventListener('click', () => fileEl.click());
+    fileEl.addEventListener('change', async (e) => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        if (!confirm('导入会覆盖当前产物与配置，确认继续？')) return;
+        flash('ce_bk_msg', '导入中…', false, { persist: true });
+        try {
+            const text = await f.text();
+            const res = await persistMod.importAll(text);
+            if (res.ok) {
+                flash('ce_bk_msg', '导入成功，即将刷新面板');
+                setTimeout(() => location.reload(), 800);
+            } else {
+                flash('ce_bk_msg', '导入失败：' + res.message, true);
+            }
+        } catch (err) {
+            flash('ce_bk_msg', '导入失败：' + err.message, true);
+        }
+    });
+}
+
 /* ============ Tab 9：历史 ============ */
 
 export function renderHistoryTab(box, rerender) {
@@ -284,6 +326,16 @@ export function renderHistoryTab(box, rerender) {
     box.innerHTML = `
         <div class="ce-pane">
             <div class="ce-section">
+                <label class="ce-label">产物备份（导出 / 导入）</label>
+                <p class="ce-faint">把全部产物（角色卡 / 人设 / 文风 / 开场白 / 世界书 / 篇章本 / 日志）打包为一个 .json，用于换设备或清缓存前留档。</p>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_bk_export">导出全部（.json）</button>
+                    <button type="button" class="menu_button" id="ce_bk_import_btn">导入备份</button>
+                    <input type="file" id="ce_bk_file" accept=".json,application/json" style="display:none">
+                    <span id="ce_bk_msg" class="ce-msg"></span>
+                </div>
+            </div>
+            <div class="ce-section">
                 <label class="ce-label">历史记录</label>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_hist_clear">清空全部</button>
@@ -292,6 +344,8 @@ export function renderHistoryTab(box, rerender) {
                 <div class="ce-histlist">${listHtml}</div>
             </div>
         </div>`;
+
+    bindBackupUI();
 
     box.querySelectorAll('.ce_hist_view').forEach((btn) => {
         btn.addEventListener('click', () => {

@@ -168,7 +168,7 @@ function nsfwLineWorld() {
 }
 
 /** 【任务1】提取世界书条目：分段逐段提取世界观/势力/地点/设定/历史/物品（原 wbExtractCore，支持断点续跑） */
-export async function wbExtractCore({ signal, entries = [], state = null, onProgress } = {}) {
+export async function wbExtractCore({ signal, entries = [], state = null, onProgress, onSegment } = {}) {
     const text = getNovel().trim();
     const size = chunkSizeOf();
     const totalChunks = Math.ceil(text.length / size);
@@ -210,13 +210,13 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
         } catch (err) {
             if (isAbort(err, signal)) { logTo('wbLog', '已停止', 'e'); break; }
             logTo('wbLog', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
-            state.next = i + 1; continue;
+            state.next = i + 1; if (onSegment) onSegment(state); continue;
         }
         const arr = extractJsonArray(raw);
         if (!Array.isArray(arr) || !arr.length) {
             const snip = String(raw).trim().replace(/\s+/g, ' ').slice(0, 90);
             logTo('wbLog', '第' + (i + 1) + '段解析失败，模型返回：' + (snip ? '「' + snip + '」' : '（空，可能被安全过滤挡了）'), 'e');
-            state.next = i + 1; continue;
+            state.next = i + 1; if (onSegment) onSegment(state); continue;
         }
         for (const e of arr) {
             if (!e || !e.title) continue;
@@ -234,6 +234,7 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
             }
         }
         state.next = i + 1;
+        if (onSegment) onSegment(state);
         logTo('wbLog', '第' + (i + 1) + '段 → 累计 ' + map.size + ' 条', 'g');
     }
     const merged = [...map.values()];
@@ -303,7 +304,7 @@ export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, max
 }
 
 /** 【任务4】剧情分段：每阶段/副本一条绿灯条目（≥300字）。迁移自原 wbPlotCore；支持断点续跑。 */
-export async function wbPlotCore({ signal, entries = [], state = null, onProgress } = {}) {
+export async function wbPlotCore({ signal, entries = [], state = null, onProgress, onSegment } = {}) {
     const text = getNovel().trim();
     const size = Math.max(50000, Number(settings().chunkSize) || 40000);
     const totalChunks = Math.ceil(text.length / size);
@@ -338,13 +339,13 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
         } catch (err) {
             if (isAbort(err, signal)) { logTo('wbLog', '已停止', 'e'); break; }
             logTo('wbLog', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
-            state.next = i + 1; continue;
+            state.next = i + 1; if (onSegment) onSegment(state); continue;
         }
         const arr = extractJsonArray(raw);
         if (!Array.isArray(arr)) {
             const snip = String(raw).trim().replace(/\s+/g, ' ').slice(0, 90);
             logTo('wbLog', '第' + (i + 1) + '段解析失败，模型返回：' + (snip ? '「' + snip + '」' : '（空，多半被安全过滤挡了，或 max_tokens 被思考用光）'), 'e');
-            state.next = i + 1; continue;
+            state.next = i + 1; if (onSegment) onSegment(state); continue;
         }
         // 即时写入，停了也保留已生成的
         for (const e of arr) {
@@ -358,6 +359,7 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
             addedTotal++;
         }
         state.next = i + 1;
+        if (onSegment) onSegment(state);
         logTo('wbLog', '第' + (i + 1) + '段 → 剧情条目累计 ' + addedTotal, 'g');
     }
     const done = state.next >= cap;

@@ -131,7 +131,7 @@ function nsfwLine() {
  * @returns {Promise<{general:Array, chapters:Array<{name:string, entries:Array}>}>}
  */
 export async function generateSplitWorldbook(nodes, {
-    signal, logEl = 'ce_wb_log', onProgress, options = {}, fullText = '',
+    signal, logEl = 'ce_wb_log', onProgress, options = {}, fullText = '', onChapterDone, onGeneralDone,
 } = {}) {
     const full = String(fullText || '');
     if (!full.trim()) throw new Error('请先导入小说');
@@ -146,6 +146,7 @@ export async function generateSplitWorldbook(nodes, {
     // —— 1. 总本：全局世界观 + 角色总表 + 剧情大纲（3 条常驻）——
     logTo(logEl, '生成总本（全局世界观 / 角色总表 / 剧情大纲）…');
     const general = await buildGeneralBook(full, chapters, { signal, logEl });
+    if (onGeneralDone) await onGeneralDone(general);
 
     // —— 2. 各篇章本：在该篇章正文范围内执行所选任务 ——
     const perChapter = [];
@@ -156,7 +157,10 @@ export async function generateSplitWorldbook(nodes, {
         const { start, end } = nodeText(node);
         const seg = full.slice(start, end);
         const entries = await tasksInRange(seg, node, opt, { signal, logEl });
-        perChapter.push({ name: node.name, entries });
+        const item = { name: node.name, entries };
+        perChapter.push(item);
+        // 某篇完成即回调：上层据此独立落盘 + 更新预览 + 更新索引
+        if (onChapterDone) await onChapterDone(item, i, chapters.length);
     }
 
     logTo(logEl, '按篇章生成完成：总本 ' + general.length + ' 条，篇章本 ' + perChapter.length + ' 本', 'g');

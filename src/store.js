@@ -45,6 +45,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     selectedNames: [],   // 已选角色名（用于生成），刷新不丢
     // 服务器落盘（依赖 Server Plugin：card-extractor-save）
     serverSaveEnabled: false, // 是否将产物落盘到酒馆服务器本地磁盘
+    // 小数据：已完成篇章索引（{ updatedAt, chapters:[{name,count}] }）
+    wbIndex: null,
 });
 
 /** 内存兜底（非酒馆环境或 localforage 不可用时使用） */

@@ -14,6 +14,7 @@ import * as worldbook from './worldbook.js';
 import * as wbByChapter from './worldbook-by-chapter.js';
 import * as timeline from './timeline.js';
 import { $, state, escapeHtml, downloadText, stopRun, saveProducts } from './ui-context.js';
+import * as persist from './persist.js';
 
 export function renderWorldTab(box) {
     const nodes = timeline.getTimeline().nodes || [];
@@ -71,10 +72,16 @@ export function renderWorldTab(box) {
                 <p class="ce-faint">
                     总本 = 全局世界观 + 角色总表 + 剧情大纲（3 条常驻）；
                     各篇章本 = 在各篇章正文范围内按上面勾选的任务生成（内容按篇章真实切分，不混线）。
+                    每篇完成即独立落盘为 <code>worldbook/&lt;篇名&gt;.json</code>，可单独导入酒馆。
                 </p>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_wb_chapter_write">解耦写入酒馆（多本）</button>
+                    <button type="button" class="menu_button" id="ce_wb_load_index">载入已完成篇章</button>
                     <span id="ce_wb_msg3" class="ce-msg"></span>
+                </div>
+                <div class="ce-rowline">
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_rerun_sel"> 仅补跑选中篇章</label>
+                    <span class="ce-faint">勾选下方篇章后，点「生成世界书」只重跑这些篇（覆盖同名落盘文件）</span>
                 </div>
                 <div id="ce_wb_groups"></div>
             </div>
@@ -105,6 +112,7 @@ export function renderWorldTab(box) {
     });
     $('ce_wb_classify').addEventListener('click', doClassify);
     $('ce_wb_chapter_write').addEventListener('click', doSplitWrite);
+    $('ce_wb_load_index').addEventListener('click', doLoadIndex);
     bindWorldModeUI(nodes);
     // 刷新 / 切 Tab 后回填上次的归类结果
     if (state.wbGroups) {
@@ -145,10 +153,20 @@ function bindWorldModeUI(nodes) {
 
 /** 按篇章生成世界书（一总多分）—— 由 runWorldbook 在「按篇章」模式下调用 */
 async function runChapterWorldbook() {
-    const nodes = timeline.getTimeline().nodes || [];
+    const allNodes = timeline.getTimeline().nodes || [];
     const full = novel.getNovel();
-    if (!nodes.length) { flash('ce_wb_msg', '请先在「时间线」页建立篇章', true); return; }
+    if (!allNodes.length) { flash('ce_wb_msg', '请先在「时间线」页建立篇章', true); return; }
     if (!full.trim()) { flash('ce_wb_msg', '请先导入小说', true); return; }
+
+    // 仅补跑选中篇章：勾选「仅补跑选中篇章」且下方有勾选的篇章时，只跑这些篇
+    const rerunSel = $('ce_wb_rerun_sel')?.checked;
+    const picked = [...document.querySelectorAll('.ce_wb_chk')].filter((c) => c.checked).map((c) => c.dataset.name);
+    let nodes = allNodes;
+    if (rerunSel) {
+        if (!picked.length) { flash('ce_wb_msg', '请先勾选要补跑的篇章', true); return; }
+        nodes = allNodes.filter((n) => picked.some((p) => p.indexOf(n.name + ' 篇章本') === 0 || p === n.name));
+        if (!nodes.length) { flash('ce_wb_msg', '未匹配到要补跑的篇章', true); return; }
+    }
 
     // 继承整本生成的选项
     const options = {
@@ -168,19 +186,44 @@ async function runChapterWorldbook() {
     state.controller = new AbortController();
     const signal = state.controller.signal;
     clearLog('ce_wb_log');
-    flash('ce_wb_msg', '按篇章生成中…', false, { persist: true });
+    flash('ce_wb_msg', rerunSel ? `补跑 ${nodes.length} 篇…` : '按篇章生成中…', false, { persist: true });
 
     try {
+        // 已完成篇章索引（用于增量展示与补跑）
+        const idx = await persist.loadWbIndex();
+        const doneChapters = (idx.chapters || []).slice();
         const groups = await wbByChapter.generateSplitWorldbook(nodes, {
             signal, logEl: 'ce_wb_log', options, fullText: full,
+            // 补跑模式下不重跑总本
+            onGeneralDone: rerunSel ? undefined : async (general) => {
+                await persist.saveChapterBook('_whole', general);
+                state.wbGroups = { general, chapters: state.wbGroups?.chapters || [] };
+                renderGroups(state.wbGroups);
+                saveProducts();
+            },
             onProgress: (i, total, name) => flash('ce_wb_msg', `生成 ${i + 1}/${total}：${name}…`, false, { persist: true }),
+            // 某篇完成：独立落盘 + 即时进预览 + 更新索引
+            onChapterDone: async (item, i, total) => {
+                await persist.saveChapterBook(item.name, item.entries);
+                const di = doneChapters.findIndex((c) => c.name === item.name);
+                const rec = { name: item.name, count: item.entries.length };
+                if (di >= 0) doneChapters[di] = rec; else doneChapters.push(rec);
+                await persist.saveWbIndex(doneChapters);
+                const cur = state.wbGroups || { general: [], chapters: [] };
+                const rest = cur.chapters.filter((c) => c.name !== item.name);
+                state.wbGroups = { general: cur.general, chapters: [...rest, item] };
+                renderGroups(state.wbGroups);
+                $('ce_wb_groups_sec').style.display = 'block';
+                saveProducts();
+                flash('ce_wb_msg', `已完成 ${i + 1}/${total}：${item.name}（${item.entries.length} 条，已落盘）`, false, { persist: true });
+            },
         });
         state.wbGroups = groups;
         renderGroups(groups);
         saveProducts();
         $('ce_wb_groups_sec').style.display = 'block';
         const total = (groups.general || []).length + (groups.chapters || []).reduce((s, c) => s + (c.entries || []).length, 0);
-        flash('ce_wb_msg', signal.aborted ? '已停止' : `完成，总本 ${groups.general.length} 条，${groups.chapters.length} 本篇章本，共 ${total} 条`);
+        flash('ce_wb_msg', signal.aborted ? '已停止（已完成篇章均已落盘）' : `完成，总本 ${groups.general.length} 条，${groups.chapters.length} 本篇章本，共 ${total} 条`);
     } catch (e) {
         flash('ce_wb_msg', '生成失败：' + e.message, true);
         logTo('ce_wb_log', '生成失败：' + e.message, 'e');
@@ -220,10 +263,36 @@ function renderGroups(groups) {
 
 function groupRowHtml(name, entries) {
     const items = entries.map((e) => `<span class="ce-tag">${escapeHtml(e.title)}</span>`).join('');
+    const total = entries.length;
     return `<div class="ce-group">
-        <div class="ce-group-head">${escapeHtml(name)} <span class="ce-faint">（${entries.length} 条）</span></div>
+        <div class="ce-group-head">
+            <label class="checkbox_label"><input type="checkbox" class="ce_wb_chk" data-name="${escapeHtml(name)}"> ${escapeHtml(name)}</label>
+            <span class="ce-faint">（${total} 条）</span>
+        </div>
         <div class="ce-group-items">${items || '<span class="ce-faint">（空）</span>'}</div>
     </div>`;
+}
+
+/** 载入已完成篇章：从落盘索引 + 文件恢复按篇章结果到预览（刷新 / 换设备后可用） */
+async function doLoadIndex() {
+    flash('ce_wb_msg3', '载入中…', false, { persist: true });
+    try {
+        const idx = await persist.loadWbIndex();
+        const whole = await persist.loadChapterBook('_whole');
+        const chapters = [];
+        for (const c of idx.chapters || []) {
+            const book = await persist.loadChapterBook(c.name);
+            if (book) chapters.push({ name: book.name || c.name, entries: book.entries || [] });
+        }
+        if (!chapters.length && !whole) { flash('ce_wb_msg3', '未发现已落盘的篇章本', true); return; }
+        state.wbGroups = { general: whole ? whole.entries : [], chapters };
+        renderGroups(state.wbGroups);
+        $('ce_wb_groups_sec').style.display = 'block';
+        saveProducts();
+        flash('ce_wb_msg3', `已载入：总本 ${whole ? whole.entries.length : 0} 条，篇章本 ${chapters.length} 本`);
+    } catch (e) {
+        flash('ce_wb_msg3', '载入失败：' + e.message, true);
+    }
 }
 
 /** 解耦写入：一次写入多本 */
@@ -255,11 +324,22 @@ async function runWorldbook() {
         return;
     }
 
+    const novelName = novel.getCurrentRecord() || '未命名';
     const tasks = [];
-    if ($('ce_wb_t_extract').checked) tasks.push(['提取条目', () => worldbook.wbExtractCore({ entries: state.wbEntries })]);
+    if ($('ce_wb_t_extract').checked) {
+        tasks.push(['提取条目', () => runWithResume('extract', novelName, (st) => worldbook.wbExtractCore({
+            entries: state.wbEntries, state: st,
+            onSegment: (s) => persist.saveProgress('extract:' + novelName, s),
+        }), { entries: state.wbEntries })]);
+    }
     if ($('ce_wb_t_bg').checked) tasks.push(['共享背景', () => worldbook.wbBgCore({})]);
     if ($('ce_wb_t_minor').checked) tasks.push(['配角群像', () => worldbook.wbMinorCore({ mode: $('ce_wb_minor_mode').value, cap: 20 })]);
-    if ($('ce_wb_t_plot').checked) tasks.push(['剧情分段', () => worldbook.wbPlotCore({ entries: state.wbEntries })]);
+    if ($('ce_wb_t_plot').checked) {
+        tasks.push(['剧情分段', () => runWithResume('plot', novelName, (st) => worldbook.wbPlotCore({
+            entries: state.wbEntries, state: st,
+            onSegment: (s) => persist.saveProgress('plot:' + novelName, s),
+        }), { entries: state.wbEntries })]);
+    }
     if ($('ce_wb_t_chars').checked) tasks.push(['人物列表', () => worldbook.wbConstantEntry({ kind: 'chars' })]);
     if ($('ce_wb_t_plotlist').checked) tasks.push(['剧情大纲', () => worldbook.wbConstantEntry({ kind: 'plot' })]);
     if (!tasks.length) { flash('ce_wb_msg', '请先勾选要生成的内容', true); return; }
@@ -288,6 +368,26 @@ async function runWorldbook() {
     } finally {
         state.running = false;
     }
+}
+
+/**
+ * 带断点续跑地执行分段任务。
+ * 先从落盘读回断点 state（若有且正文未变则续跑），执行内核，任务完成后清断点。
+ * @param {string} kind 'extract' | 'plot'
+ * @param {string} novelName 当前小说名（作为断点隔离键）
+ * @param {(state:object|null) => Promise<any>} run 执行内核（传入 state）
+ */
+async function runWithResume(kind, novelName, run) {
+    const taskKey = kind + ':' + novelName;
+    let st = await persist.loadProgress(taskKey);
+    const res = await run(st);
+    // 内核返回 { entries, state, done }：done=true 或 state=null 表示跑完
+    if (res && res.done) {
+        await persist.clearProgress(taskKey);
+    } else if (res && res.state) {
+        await persist.saveProgress(taskKey, res.state);
+    }
+    return res;
 }
 
 /** 归一化世界书生成结果 */
