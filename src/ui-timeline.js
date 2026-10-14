@@ -170,7 +170,7 @@ async function doNormalizeSynopsis() {
     const btn = $('ce_tl_syn_norm');
     btn.disabled = true;
     clearLog('ce_tl_log');
-    flash('ce_tl_msg', 'AI 优化中…');
+    flash('ce_tl_msg', 'AI 优化中…', false, { persist: true });
     logTo('ce_tl_log', '正在把梗概整理成标准格式…');
     try {
         const text = await timeline.normalizeSynopsisText(raw);

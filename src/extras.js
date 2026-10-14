@@ -58,7 +58,7 @@ function maxTokensAtLeast(n) {
  * @param {{desc:string, charName?:string, rel?:string, detail?:'concise'|'rich'|'', useNovel?:boolean, nsfw?:boolean, statPanel?:{fields?:string, refs?:string, persona?:boolean}|null}} o
  * @returns {Promise<string>} 人设文本（清洗后）
  */
-export async function generatePersona({ desc, charName = '', rel = '', detail = '', useNovel = false, nsfw = false, statPanel = null } = {}) {
+export async function generatePersona({ desc, charName = '', rel = '', detail = '', useNovel = false, nsfw = false, statPanel = null, logEl = 'ce_pn_log' } = {}) {
     const detailRule = detail === 'concise'
         ? '· 篇幅精简，几句话到一小段即可。'
         : detail === 'rich'
@@ -108,6 +108,7 @@ export async function generatePersona({ desc, charName = '', rel = '', detail = 
         useStream: !!settings().useStream,
         maxCont: settings().autoCont ? 5 : 0,
         label: 'user 人设',
+        logEl,
     });
     return stripFence(stripThink(raw)).trim();
 }
@@ -119,7 +120,7 @@ export async function generatePersona({ desc, charName = '', rel = '', detail = 
  * @param {{charName:string, view?:'second'|'first'|'third', scene?:string, useNovel?:boolean, nsfw?:boolean, cardText?:string, styleText?:string}} o
  * @returns {Promise<string>} 开场白正文（清洗后）
  */
-export async function generateFirstMessage({ charName, view = 'second', scene = '', useNovel = false, nsfw = false, cardText = '', styleText = '' } = {}) {
+export async function generateFirstMessage({ charName, view = 'second', scene = '', useNovel = false, nsfw = false, cardText = '', styleText = '', logEl = 'ce_fm_log' } = {}) {
     const viewRule = view === 'first' ? '· 用角色第一人称「我」的口吻来写。'
         : view === 'third' ? '· 用第三人称旁白视角来写。'
             : '· 用第二人称：以角色的动作、语言、神态来对着 {{user}} 展开，可穿插对 {{user}} 的称呼与描写。';
@@ -153,6 +154,7 @@ export async function generateFirstMessage({ charName, view = 'second', scene = 
         useStream: !!settings().useStream,
         maxCont: settings().autoCont ? 5 : 0,
         label: '开场白',
+        logEl,
     });
     return stripFence(stripThink(raw)).trim();
 }
@@ -164,7 +166,7 @@ export async function generateFirstMessage({ charName, view = 'second', scene = 
  * @param {{nsfw?:boolean, extra?:string}} o
  * @returns {Promise<string>} 文风分析文本（清洗后）
  */
-export async function distillStyle({ nsfw = false, extra = '' } = {}) {
+export async function distillStyle({ nsfw = false, extra = '', logEl = 'ce_style_log' } = {}) {
     const text = getNovel().trim();
     if (!text) throw new Error('请先导入小说');
 
@@ -204,6 +206,7 @@ export async function distillStyle({ nsfw = false, extra = '' } = {}) {
         useStream: !!settings().useStream,
         maxCont: settings().autoCont ? 5 : 0,
         label: '文风',
+        logEl,
     });
     return stripFence(stripThink(raw)).trim();
 }
@@ -215,7 +218,7 @@ export async function distillStyle({ nsfw = false, extra = '' } = {}) {
  * @param {{items:Array<{type:'card'|'wb', label:string, name:string, content:string, keys?:string[]}>, cardText?:string, worldText?:string, onItem?:(cur:number,total:number,label:string,partial:string)=>void}} o
  * @returns {Promise<string>} 修正后成品文本（各项以 ========== 标题 ========== 分隔）
  */
-export async function selfCheck({ items = [], onItem } = {}) {
+export async function selfCheck({ items = [], onItem, logEl = 'ce_check_log' } = {}) {
     const picks = (items || []).filter(Boolean);
     if (!picks.length) throw new Error('请先勾选要检查的项');
 
@@ -266,6 +269,7 @@ export async function selfCheck({ items = [], onItem } = {}) {
                 useStream: !!settings().useStream,
                 maxCont: settings().autoCont ? 5 : 0,
                 label: it.label,
+                logEl,
             });
         } catch (err) {
             if (isAbort(err)) break;

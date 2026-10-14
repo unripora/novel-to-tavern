@@ -257,7 +257,7 @@ async function runGenerate() {
 
             if (!activeNodes.length) {
                 // 模式 off：整本抽取（原行为）
-                flash('ce_gen_msg', '生成 ' + nm + '…');
+                flash('ce_gen_msg', '生成 ' + nm + '…', false, { persist: true });
                 const cctx = scan.collectContext(nm, [], fullCtx);
                 const prompt = buildCardPrompt(nm, tmpl, cctx, { detail, nsfw, statPanel });
                 const raw = await runOne(prompt, signal, results, nm, state.selectedNames);
@@ -272,7 +272,7 @@ async function runGenerate() {
                 let whole = '';
                 for (const node of activeNodes) {
                     if (signal.aborted) break;
-                    flash('ce_gen_msg', `生成 ${nm} · ${node.name}…`);
+                    flash('ce_gen_msg', `生成 ${nm} · ${node.name}…`, false, { persist: true });
                     const ctx = timeline.contextInNode(nm, scan.charNames(nm), node);
                     const prompt = buildStagePrompt(nm, tmpl, ctx, node, { detail, nsfw, statPanel });
                     let raw = '';
@@ -298,7 +298,7 @@ async function runGenerate() {
             for (const node of activeNodes) {
                 if (signal.aborted) break;
                 const label = `${nm}（${node.name}）`;
-                flash('ce_gen_msg', '生成 ' + label + '…');
+                flash('ce_gen_msg', '生成 ' + label + '…', false, { persist: true });
                 const ctx = timeline.contextInNode(nm, scan.charNames(nm), node);
                 const prompt = buildStagePrompt(nm, tmpl, ctx, node, { detail, nsfw, statPanel });
                 let raw = '';
@@ -481,15 +481,23 @@ function openCardPreview() {
 
     $('ce_pv_cancel').addEventListener('click', () => { box.style.display = 'none'; });
     $('ce_pv_import').addEventListener('click', async () => {
+        const desc = $('ce_pv_desc').value;
         const payload = {
             name: $('ce_pv_name').value.trim(),
-            description: $('ce_pv_desc').value,
+            description: desc,
+            raw: desc,                          // 兜底：确保主体内容不为空
             personality: $('ce_pv_personality').value,
             first_mes: $('ce_pv_first').value,
             creator_notes: '由「角色卡提取工具」插件生成',
         };
-        const res = await writer.writeCharacterToTavern(payload);
+        flash('ce_pv_msg', '正在导入…');
+        const res = await writer.writeCharacterToTavern(payload, {
+            onLog: (m, e) => logTo('ce_gen_log', '[导入] ' + m, e ? 'e' : ''),
+        });
         flash('ce_pv_msg', res.message, !res.ok);
-        if (res.ok && res.mode === 'direct') toast('角色已创建到酒馆');
+        if (res.ok) {
+            toast('角色已创建到酒馆：' + payload.name);
+            box.style.display = 'none';
+        }
     });
 }

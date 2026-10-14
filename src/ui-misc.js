@@ -52,6 +52,7 @@ export function renderPersonaTab(box) {
                     <button type="button" class="menu_button" id="ce_pn_run">生成 user 人设</button>
                     <span id="ce_pn_msg" class="ce-msg"></span>
                 </div>
+                <div class="ce-log" id="ce_pn_log"></div>
             </div>
             <div class="ce-section">
                 <label class="ce-label">生成结果</label>
@@ -64,7 +65,8 @@ export function renderPersonaTab(box) {
     $('ce_pn_out').value = state.personaText;
     bindPersonaStatUI();
     $('ce_pn_run').addEventListener('click', async () => {
-        flash('ce_pn_msg', '生成中…');
+        clearLog('ce_pn_log');
+        flash('ce_pn_msg', '生成中…', false, { persist: true });
         try {
             const statPanel = $('ce_pn_stat')?.checked
                 ? { fields: $('ce_pn_stat_fields')?.value || '', refs: $('ce_pn_stat_refs')?.value || '', persona: true }
@@ -208,12 +210,12 @@ async function doChapterGen() {
     state.controller = new AbortController();
     const signal = state.controller.signal;
     clearLog('ce_wb_log');
-    flash('ce_wb_msg3', '按篇章生成中…');
+    flash('ce_wb_msg3', '按篇章生成中…', false, { persist: true });
 
     try {
         const groups = await wbByChapter.generateSplitWorldbook(nodes, {
             signal, logEl: 'ce_wb_log',
-            onProgress: (i, total, name) => flash('ce_wb_msg3', `生成 ${i + 1}/${total}：${name}…`),
+            onProgress: (i, total, name) => flash('ce_wb_msg3', `生成 ${i + 1}/${total}：${name}…`, false, { persist: true }),
         });
         state.wbGroups = groups;
         renderGroups(groups);
@@ -231,7 +233,7 @@ async function doClassify() {
     if (!state.wbEntries.length) { flash('ce_wb_msg4', '没有条目可归类', true); return; }
     const nodes = timeline.getTimeline().nodes || [];
     if (!nodes.length) { flash('ce_wb_msg4', '请先在「时间线」页建立篇章', true); return; }
-    flash('ce_wb_msg4', '归类中…');
+    flash('ce_wb_msg4', '归类中…', false, { persist: true });
     try {
         const groups = await worldbook.classifyEntries(state.wbEntries, nodes, {
             onLog: (m, c) => logTo('ce_wb_log', m, c),
@@ -303,7 +305,7 @@ async function runWorldbook() {
         for (const [label, fn] of tasks) {
             if (state.controller.signal.aborted) break;
             logTo('ce_wb_log', '▶ ' + label);
-            flash('ce_wb_msg', label + '…');
+            flash('ce_wb_msg', label + '…', false, { persist: true });
             const res = await fn();
             // 统一归一化：{entries,state} / 数组 / 单条目 三种返回形态
             const list = normalizeWbResult(res);
@@ -375,6 +377,7 @@ export function renderStyleTab(box) {
                     <button type="button" class="menu_button" id="ce_style_run">蒸馏文风</button>
                     <span id="ce_style_msg" class="ce-msg"></span>
                 </div>
+                <div class="ce-log" id="ce_style_log"></div>
             </div>
             <div class="ce-section">
                 <label class="ce-label">生成结果</label>
@@ -385,7 +388,8 @@ export function renderStyleTab(box) {
 
     $('ce_style_out').value = state.styleText;
     $('ce_style_run').addEventListener('click', async () => {
-        flash('ce_style_msg', '分析中…');
+        clearLog('ce_style_log');
+        flash('ce_style_msg', '分析中…', false, { persist: true });
         try {
             const text = await extras.distillStyle({ nsfw: $('ce_style_nsfw').checked, extra: $('ce_style_extra').value });
             state.styleText = text;
@@ -420,6 +424,7 @@ export function renderFirstTab(box) {
                     <button type="button" class="menu_button" id="ce_fm_run">生成开场白</button>
                     <span id="ce_fm_msg" class="ce-msg"></span>
                 </div>
+                <div class="ce-log" id="ce_fm_log"></div>
             </div>
             <div class="ce-section">
                 <label class="ce-label">生成结果</label>
@@ -430,7 +435,8 @@ export function renderFirstTab(box) {
 
     $('ce_fm_out').value = state.firstText;
     $('ce_fm_run').addEventListener('click', async () => {
-        flash('ce_fm_msg', '生成中…');
+        clearLog('ce_fm_log');
+        flash('ce_fm_msg', '生成中…', false, { persist: true });
         try {
             const text = await extras.generateFirstMessage({
                 charName: $('ce_fm_char').value.trim() || state.selectedNames[0] || '',
@@ -484,13 +490,13 @@ export function renderCheckTab(box) {
             if (cb.checked) picked.push(items[Number(cb.dataset.i)]);
         });
         if (!picked.length) { flash('ce_check_msg', '请先勾选要检查的项', true); return; }
-        flash('ce_check_msg', '检查中…');
+        flash('ce_check_msg', '检查中…', false, { persist: true });
         clearLog('ce_check_log');
         try {
             const text = await extras.selfCheck({
                 items: picked,
                 onItem: (cur, total, label, partial) => {
-                    flash('ce_check_msg', `${cur}/${total} · ${label}`);
+                    flash('ce_check_msg', `${cur}/${total} · ${label}`, false, { persist: true });
                     $('ce_check_out').value = partial;
                 },
             });

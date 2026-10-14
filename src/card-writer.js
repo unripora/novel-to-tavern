@@ -67,35 +67,65 @@ function normalizeCardObject(o) {
 
 /**
  * 写入酒馆角色
+ * 依次尝试：① /char-create 斜杠命令 → ② /api/characters/create 接口 → ③ 导出 .json 兜底
  * @param {object} card 结构化角色卡
- * @returns {Promise<{ok:boolean, mode:string, message:string}>}
+ * @param {{onLog?:(m:string,e?:boolean)=>void}} [opts]
+ * @returns {Promise<{ok:boolean, mode:string, message:string, error?:string}>}
  */
-export async function writeCharacterToTavern(card) {
+export async function writeCharacterToTavern(card, { onLog } = {}) {
     const c = ctx();
     if (!c) return { ok: false, mode: 'none', message: '未检测到酒馆环境' };
+    const log = (m, e) => { console.log('[card-extractor][char-write]', m); if (onLog) onLog(m, e); };
+    const errs = [];
 
-    // 主路径：尝试直接创建角色
+    // ① 斜杠命令 /char-create（酒馆官方推荐，兼容性最好）
     try {
-        const created = await tryCreateCharacter(c, card);
-        if (created) return { ok: true, mode: 'direct', message: '已创建角色：' + card.name };
-    } catch (e) {
-        console.warn('[card-extractor] 直接创建角色失败，回退导出', e);
-    }
+        const ok = await trySlashCreate(c, card, log);
+        if (ok) return { ok: true, mode: 'slash', message: '已创建角色：' + card.name };
+    } catch (e) { errs.push('slash: ' + e.message); log('/char-create 失败：' + e.message, true); }
 
-    // 兜底：导出 .json
+    // ② 直接调 API 接口
+    try {
+        const ok = await tryCreateCharacter(c, card, log);
+        if (ok) return { ok: true, mode: 'direct', message: '已创建角色：' + card.name };
+    } catch (e) { errs.push('api: ' + e.message); log('API 创建失败：' + e.message, true); }
+
+    // ③ 兜底：导出 .json
     exportCardJson(card);
-    return { ok: true, mode: 'export', message: '已导出角色卡文件，请在酒馆「角色管理 → 导入角色」中导入' };
+    return {
+        ok: false, mode: 'export',
+        message: '无法直接写入酒馆，已导出角色卡文件。请在酒馆「角色管理 → 导入角色」中手动导入。'
+            + (errs.length ? '（原因：' + errs.join('；') + '）' : ''),
+        error: errs.join('；'),
+    };
 }
 
 /**
- * 尝试直接创建角色
- * 兼容酒馆不同版本：优先 createCharacterData + 内部保存；失败返回 null 触发兜底。
+ * 用斜杠命令 /char-create 创建角色
+ * 参数以转义后的字符串传入，避免逗号/引号破坏命令解析。
  */
-async function tryCreateCharacter(c, card) {
-    // 酒馆通过 /api/characters/create 接口创建角色（内部函数封装不一），
-    // 这里保守处理：仅当存在明确可用的创建入口时才走主路径。
-    if (typeof c.createCharacterData !== 'function') return null;
+async function trySlashCreate(c, card, log) {
+    if (typeof c.executeSlashCommandsWithOptions !== 'function') return false;
+    const esc = (s) => String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const parts = ['/char-create'];
+    parts.push('name="' + esc(card.name || '未命名角色') + '"');
+    if (card.description || card.raw) parts.push('description="' + esc(card.description || card.raw) + '"');
+    if (card.personality) parts.push('personality="' + esc(card.personality) + '"');
+    if (card.scenario) parts.push('scenario="' + esc(card.scenario) + '"');
+    if (card.first_mes) parts.push('first_mes="' + esc(card.first_mes) + '"');
+    if (card.mes_example) parts.push('mes_example="' + esc(card.mes_example) + '"');
+    if (card.creator_notes) parts.push('creator_notes="' + esc(card.creator_notes) + '"');
+    const cmd = parts.join(' ');
+    log('执行 ' + cmd.slice(0, 80) + '…');
+    const res = await c.executeSlashCommandsWithOptions(cmd, { showOutput: false });
+    // 命令执行成功一般返回 undefined 或字符串；抛错才是失败
+    return res !== null && res !== false;
+}
 
+/**
+ * 尝试直接创建角色（调 /api/characters/create 接口）
+ */
+async function tryCreateCharacter(c, card, log) {
     const payload = {
         name: card.name || '未命名角色',
         description: card.description || card.raw || '',
@@ -105,9 +135,8 @@ async function tryCreateCharacter(c, card) {
         mes_example: card.mes_example || '',
         creator_notes: card.creator_notes || '',
         tags: card.tags || [],
+        ch_name: card.name || '未命名角色',
     };
-
-    // 调用酒馆内部创建接口
     const headers = c.getRequestHeaders ? c.getRequestHeaders() : { 'Content-Type': 'application/json' };
     const resp = await fetch('/api/characters/create', {
         method: 'POST',
@@ -115,7 +144,12 @@ async function tryCreateCharacter(c, card) {
         body: JSON.stringify(payload),
         cache: 'no-cache',
     });
-    if (!resp.ok) throw new Error('创建角色失败 HTTP ' + resp.status);
+    if (!resp.ok) {
+        let detail = '';
+        try { detail = (await resp.text()).slice(0, 200); } catch (e) { /* ignore */ }
+        throw new Error('HTTP ' + resp.status + (detail ? ' ' + detail : ''));
+    }
+    log('API 创建成功');
     return true;
 }
 

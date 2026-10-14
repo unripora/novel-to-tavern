@@ -138,7 +138,7 @@ async function runScan() {
     try {
         for (let i = 0; i < chunks.length; i++) {
             if (signal.aborted) break;
-            flash('ce_scan_msg', `扫描 ${i + 1}/${chunks.length}…`);
+            flash('ce_scan_msg', `扫描 ${i + 1}/${chunks.length}…`, false, { persist: true });
             const prompt = buildScanPrompt(chunks[i]);
             let raw = '';
             try {

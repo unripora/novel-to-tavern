@@ -93,16 +93,40 @@ export function clearLog(elId) {
     el.classList.remove('show');
 }
 
-/** 短暂提示（面板内小字） */
-export function flash(elId, msg, isErr) {
+/** flash 的定时器句柄（按元素 id 记录，避免旧定时器误清新的持久提示） */
+const _flashTimers = {};
+
+/**
+ * 短暂提示（面板内小字）
+ * @param {string} elId 目标元素 id
+ * @param {string} msg 文本
+ * @param {boolean} [isErr] 是否错误色
+ * @param {{persist?:boolean}} [opts] persist=true 时不自动清除（用于「生成中…」这类持续提示）
+ */
+export function flash(elId, msg, isErr, opts = {}) {
     const el = document.getElementById(elId);
     if (!el) return;
+    // 清掉该元素上未触发的旧定时器
+    if (_flashTimers[elId]) { clearTimeout(_flashTimers[elId]); _flashTimers[elId] = null; }
     el.textContent = msg;
     el.style.color = isErr ? '#e0736a' : '#8fbf8a';
-    setTimeout(() => { el.textContent = ''; }, 2600);
+    if (!opts.persist) {
+        _flashTimers[elId] = setTimeout(() => {
+            const cur = document.getElementById(elId);
+            if (cur) cur.textContent = '';
+            _flashTimers[elId] = null;
+        }, 2600);
+    }
+}
+
+/** 立即清除某元素的提示（结束持续提示时用） */
+export function clearFlash(elId) {
+    if (_flashTimers[elId]) { clearTimeout(_flashTimers[elId]); _flashTimers[elId] = null; }
+    const el = document.getElementById(elId);
+    if (el) el.textContent = '';
 }
 
 export default {
     toast, yieldToUI, stripFence, stripThink, dispThink,
-    extractJsonArray, uniq, logTo, clearLog, flash,
+    extractJsonArray, uniq, logTo, clearLog, flash, clearFlash,
 };
