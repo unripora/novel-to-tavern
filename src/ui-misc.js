@@ -7,6 +7,7 @@ import { toast, flash, clearLog } from './util.js';
 import { settings, persist } from './store.js';
 import * as extras from './extras.js';
 import * as persistMod from './persist.js';
+import * as novel from './novel.js';
 import { $, state, escapeHtml, copyText, saveProducts, downloadText } from './ui-context.js';
 
 /* ============ Tab 4：user 人设 ============ */
@@ -281,7 +282,8 @@ function bindBackupUI() {
     exportBtn.addEventListener('click', async () => {
         flash('ce_bk_msg', '打包中…', false, { persist: true });
         try {
-            const json = await persistMod.exportAll();
+            const rec = novel.getCurrentRecord() || '';
+            const json = await persistMod.exportAll(rec);
             const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
             downloadText(json, 'card-extractor-backup-' + stamp + '.json', 'application/json');
             flash('ce_bk_msg', '已导出备份文件');
@@ -299,7 +301,8 @@ function bindBackupUI() {
         flash('ce_bk_msg', '导入中…', false, { persist: true });
         try {
             const text = await f.text();
-            const res = await persistMod.importAll(text);
+            const rec = novel.getCurrentRecord() || '';
+            const res = await persistMod.importAll(text, rec);
             if (res.ok) {
                 flash('ce_bk_msg', '导入成功，即将刷新面板');
                 setTimeout(() => location.reload(), 800);

@@ -439,6 +439,35 @@
     border: 1px solid rgba(255, 255, 255, .1);
 }
 
+/* 按卷生成：卷列表 */
+.ce-vollist {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.ce-volline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .03);
+    cursor: pointer;
+}
+
+.ce-volline:hover {
+    background: rgba(255, 255, 255, .06);
+}
+
+.ce-volline .ce-faint {
+    margin-left: auto;
+}
+
 /* 进度条 */
 .ce-prog {
     height: 8px;

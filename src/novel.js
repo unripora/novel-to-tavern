@@ -5,7 +5,8 @@
  * 正文存 localforage（见 store.js）。
  */
 
-import { novelStore, settings, persist, serverMaybeSave, serverMaybeDel } from './store.js';
+import { novelStore, settings, persist, serverMaybeDel } from './store.js';
+import * as persistMod from './persist.js';
 
 const READ_CHUNK = 4 * 1024 * 1024;   // 每次读取 4MB
 const PREVIEW_LIMIT = 200000;          // 预览截断长度
@@ -110,18 +111,13 @@ export async function restoreLastNovel() {
     } catch (e) { return ''; }
 }
 
-/** 安全文件名（去掉路径分隔与非法字符） */
-function safeFileName(name) {
-    return String(name || '').replace(/[\\/:*?"<>|]/g, '_').trim() || ('novel_' + Date.now());
-}
-
 /** 保存当前正文到记录 */
 export async function saveNovelRecord(name) {
     if (!name) throw new Error('请填写小说名称');
     await novelStore.save(name, novelText);
     setCurrentRecord(name);
-    // 开关开启时同步落盘服务器（.txt），失败静默跳过
-    serverMaybeSave('novel/' + safeFileName(name) + '.txt', novelText).catch(() => { });
+    // 开关开启时同步落盘服务器工作区（<记录名>/novel.txt），失败静默跳过
+    persistMod.saveNovelText(name, novelText, name).catch(() => { });
     return name;
 }
 
@@ -137,8 +133,8 @@ export async function loadNovelRecord(name) {
 export async function deleteNovelRecord(name) {
     await novelStore.del(name);
     if (getCurrentRecord() === name) setCurrentRecord('');
-    // 同步删除服务器落盘文件（开关关闭 / 插件不可用时内部静默跳过）
-    serverMaybeDel('novel/' + safeFileName(name) + '.txt').catch(() => { });
+    // 同步删除服务器工作区下的正文（开关关闭 / 插件不可用时内部静默跳过）
+    serverMaybeDel(persistMod.wsPath(name, 'novel.txt')).catch(() => { });
 }
 
 /** 列出全部记录名 */
