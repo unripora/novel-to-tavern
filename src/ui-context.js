@@ -14,6 +14,7 @@ export const state = {
     templates: [],
     curTpl: 0,
     cardText: '',
+    cardGroups: [],
     personaText: '',
     firstText: '',
     styleText: '',
@@ -28,7 +29,7 @@ export const state = {
 };
 
 /** 需要持久化的产物字段（切 Tab 保留内存、刷新存活于 localforage） */
-const PRODUCT_KEYS = ['cardText', 'personaText', 'firstText', 'styleText', 'wbEntries', 'wbPreview', 'wbGroups', 'wbGroupNames'];
+const PRODUCT_KEYS = ['cardText', 'cardGroups', 'personaText', 'firstText', 'styleText', 'wbEntries', 'wbPreview', 'wbGroups', 'wbGroupNames'];
 /** 日志缓存持久化：仅在生成期间防抖存一次，避免频繁写入 */
 let _logSaveTimer = null;
 

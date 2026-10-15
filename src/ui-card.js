@@ -12,6 +12,7 @@ import { DEFAULT_TPL, buildStatPanelBlock, buildStageHeader } from './prompts.js
 import * as timeline from './timeline.js';
 import { openCardPreview as openCardPreviewPanel } from './ui-card-preview.js';
 import { $, state, escapeHtml, stopRun, saveProducts } from './ui-context.js';
+import * as stBridge from './st-bridge.js';
 
 export function renderCardTab(box) {
     const tpls = state.templates.map((t, i) =>
@@ -84,7 +85,14 @@ export function renderCardTab(box) {
             <div class="ce-section">
                 <label class="ce-label">生成结果</label>
                 <div class="ce-log" id="ce_gen_log"></div>
-                <textarea id="ce_output" class="text_pole" rows="12" placeholder="生成的角色卡会显示在这里，可直接编辑…"></textarea>
+                <div class="ce-rowline">
+                    <button type="button" class="menu_button" id="ce_pv_all">全部导入酒馆</button>
+                    <button type="button" class="menu_button" id="ce_export_all">导出全部 .json</button>
+                    <button type="button" class="menu_button" id="ce_cards_clear">清空结果</button>
+                    <span id="ce_cards_msg" class="ce-msg"></span>
+                </div>
+                <div id="ce_card_list" class="ce-cardlist"></div>
+                <textarea id="ce_output" class="text_pole" rows="8" placeholder="生成的角色卡会显示在这里（合并视图，可编辑）…"></textarea>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_preview">预览 / 导入酒馆</button>
                     <button type="button" class="menu_button" id="ce_export">导出 .json</button>
@@ -103,13 +111,129 @@ export function renderCardTab(box) {
 
     $('ce_gen').addEventListener('click', runGenerate);
     $('ce_stop').addEventListener('click', stopRun);
-    $('ce_preview').addEventListener('click', openCardPreview);
+    $('ce_preview').addEventListener('click', () => {
+        // 单张预览：优先预览列表中最后一张（最近生成），无列表则用合并文本
+        const n = (state.cardGroups || []).length;
+        openCardPreview(n ? n - 1 : undefined);
+    });
     $('ce_export').addEventListener('click', () => {
         const card = writer.parseCard(state.cardText, { name: state.selectedNames[0] });
         writer.exportCardJson(card);
         flash('ce_out_msg', '已导出 .json');
     });
     $('ce_cont').addEventListener('click', continueGenerate);
+    $('ce_pv_all').addEventListener('click', importAllCards);
+    $('ce_export_all').addEventListener('click', exportAllCards);
+    $('ce_cards_clear').addEventListener('click', clearCards);
+    renderCardList();
+}
+
+/** 渲染角色卡分组列表：每张卡可编辑 / 导入 / 导出 */
+function renderCardList() {
+    const box = $('ce_card_list');
+    if (!box) return;
+    const list = state.cardGroups || [];
+    if (!list.length) { box.innerHTML = '<span class="ce-faint">（暂无卡片，先点「生成角色卡」）</span>'; return; }
+    box.innerHTML = list.map((c, i) => `
+        <div class="ce-cardgroup" data-idx="${i}">
+            <div class="ce-cardgroup-head">
+                <input type="text" class="text_pole ce_card_title" style="flex:1" value="${escapeHtml(c.name || '')}" data-idx="${i}" placeholder="角色卡名字">
+                <button type="button" class="menu_button ce_card_edit" data-idx="${i}">编辑</button>
+                <button type="button" class="menu_button ce_card_import" data-idx="${i}">导入酒馆</button>
+                <button type="button" class="menu_button ce_card_export" data-idx="${i}">导出</button>
+                <button type="button" class="menu_button ce_card_del" data-idx="${i}">删除</button>
+            </div>
+        </div>`).join('');
+
+    box.querySelectorAll('.ce_card_title').forEach((inp) => {
+        inp.addEventListener('input', (e) => {
+            const i = Number(e.target.dataset.idx);
+            if (state.cardGroups[i]) { state.cardGroups[i].name = e.target.value; saveProducts(); }
+        });
+    });
+    box.querySelectorAll('.ce_card_edit').forEach((b) => b.addEventListener('click', () => editCardPopup(Number(b.dataset.idx))));
+    box.querySelectorAll('.ce_card_import').forEach((b) => b.addEventListener('click', () => importOneCard(Number(b.dataset.idx))));
+    box.querySelectorAll('.ce_card_export').forEach((b) => b.addEventListener('click', () => exportOneCard(Number(b.dataset.idx))));
+    box.querySelectorAll('.ce_card_del').forEach((b) => b.addEventListener('click', () => {
+        const i = Number(b.dataset.idx);
+        state.cardGroups.splice(i, 1);
+        state.cardText = state.cardGroups.map((c) => c.text).join('\n\n\n');
+        $('ce_output').value = state.cardText;
+        saveProducts(); renderCardList();
+    }));
+}
+
+/** 弹窗编辑单张角色卡（完整文本） */
+async function editCardPopup(idx) {
+    const c = state.cardGroups[idx];
+    if (!c) return;
+    const ok = await stBridge.popupForm({
+        title: '编辑角色卡：' + (c.name || ''),
+        bodyHtml: '<textarea id="ce_ed_card" class="text_pole" rows="16" style="width:100%">' + escapeHtml(c.text || '') + '</textarea>',
+        onOpen: (root) => { const t = root.querySelector('#ce_ed_card'); if (t) t.focus(); },
+    });
+    if (!ok) return;
+    const el = document.getElementById('ce_ed_card');
+    const text = el ? el.value : c.text;
+    c.text = text;
+    // 名字以标题框为准；若为空则尝试从文本解析
+    if (!c.name) c.name = writer.parseCard(text, {}).name || c.name;
+    state.cardText = state.cardGroups.map((x) => x.text).join('\n\n\n');
+    $('ce_output').value = state.cardText;
+    saveProducts(); renderCardList();
+    flash('ce_cards_msg', '已更新卡片');
+}
+
+/** 导入单张卡 */
+async function importOneCard(idx) {
+    const c = state.cardGroups[idx];
+    if (!c) return;
+    const card = writer.parseCard(c.text, { name: c.name });
+    flash('ce_cards_msg', '导入中…', false, { persist: true });
+    const res = await writer.writeCharacterToTavern(card, {
+        onLog: (m, e) => logTo('ce_gen_log', '[导入] ' + m, e ? 'e' : ''),
+    });
+    flash('ce_cards_msg', res.message, !res.ok);
+    if (res.ok) toast('已导入：' + card.name);
+}
+
+/** 全部导入 */
+async function importAllCards() {
+    const list = state.cardGroups || [];
+    if (!list.length) { flash('ce_cards_msg', '没有卡片可导入', true); return; }
+    flash('ce_cards_msg', '全部导入中…', false, { persist: true });
+    let okN = 0;
+    for (let i = 0; i < list.length; i++) {
+        const card = writer.parseCard(list[i].text, { name: list[i].name });
+        const res = await writer.writeCharacterToTavern(card, {
+            onLog: (m, e) => logTo('ce_gen_log', '[导入] ' + m, e ? 'e' : ''),
+        });
+        if (res.ok) okN++;
+    }
+    flash('ce_cards_msg', `导入完成：成功 ${okN}/${list.length}`);
+}
+
+/** 导出单张卡 */
+function exportOneCard(idx) {
+    const c = state.cardGroups[idx];
+    if (!c) return;
+    writer.exportCardJson(writer.parseCard(c.text, { name: c.name }));
+}
+
+/** 导出全部卡（逐张下载） */
+function exportAllCards() {
+    const list = state.cardGroups || [];
+    if (!list.length) { flash('ce_cards_msg', '没有卡片可导出', true); return; }
+    list.forEach((c) => writer.exportCardJson(writer.parseCard(c.text, { name: c.name })));
+    flash('ce_cards_msg', `已导出 ${list.length} 张 .json`);
+}
+
+/** 清空结果 */
+function clearCards() {
+    state.cardGroups = []; state.cardText = '';
+    $('ce_output').value = '';
+    saveProducts(); renderCardList();
+    flash('ce_cards_msg', '已清空');
 }
 
 function bindStatPanelUI() {
@@ -250,26 +374,48 @@ async function runGenerate() {
     const activeNodes = (tlMode !== 'off' && tlNodes.length)
         ? (pickIdx !== '' && pickIdx != null ? [tlNodes[Number(pickIdx)]] : tlNodes)
         : [];
-    const results = {};
+    // 本次生成清空旧列表，队列式重新生成，每完成一张即时入列表
+    state.cardGroups = [];
+    renderCardList();
+
+    /** 每完成一张：入列表 + 刷新合并视图 */
+    const pushCard = (name, text) => {
+        state.cardGroups.push({ name, text });
+        state.cardText = state.cardGroups.map((c) => c.text).join('\n\n\n');
+        $('ce_output').value = state.cardText;
+        saveProducts();
+        renderCardList();
+    };
 
     try {
         for (const nm of state.selectedNames) {
             if (signal.aborted) break;
 
             if (!activeNodes.length) {
-                // 模式 off：整本抽取（原行为）
+                // 模式 off：整本抽取
                 flash('ce_gen_msg', '生成 ' + nm + '…', false, { persist: true });
                 const cctx = scan.collectContext(nm, [], fullCtx);
                 const prompt = buildCardPrompt(nm, tmpl, cctx, { detail, nsfw, statPanel });
-                const raw = await runOne(prompt, signal, results, nm, state.selectedNames);
-                if (raw == null) break;
-                results[nm] = postProcessCard(stripThink(stripFence(raw)).trim(), nm);
+                let raw = '';
+                try {
+                    raw = await generate(prompt, {
+                        signal, useStream: !!settings().useStream,
+                        maxCont: settings().autoCont ? 5 : 0,
+                        onText: (t) => { $('ce_output').value = state.cardText + '\n\n\n' + t; },
+                        logEl: 'ce_gen_log', label: nm,
+                    });
+                } catch (e) {
+                    if (signal.aborted) break;
+                    logTo('ce_gen_log', nm + ' 失败：' + e.message, 'e');
+                    continue;
+                }
+                pushCard(nm, postProcessCard(stripThink(stripFence(raw)).trim(), nm));
                 logTo('ce_gen_log', nm + ' 完成', 'g');
                 continue;
             }
 
             if (tlMode === 'single') {
-                // 单卡分阶段：遍历篇章，卡内按篇章分段
+                // 单卡分阶段：遍历篇章，卡内按篇章分段，合成一张卡
                 let whole = '';
                 for (const node of activeNodes) {
                     if (signal.aborted) break;
@@ -288,14 +434,13 @@ async function runGenerate() {
                         continue;
                     }
                     whole += buildStageHeader(node.name, node.summary) + stripThink(stripFence(raw)).trim();
-                    $('ce_output').value = joinCards(results, state.selectedNames) + head(nm, state.selectedNames) + whole;
                     logTo('ce_gen_log', `${nm}·${node.name} 完成`, 'g');
                 }
-                results[nm] = whole;
+                if (whole) pushCard(nm, whole);
                 continue;
             }
 
-            // split：按篇章拆多卡
+            // split：按篇章拆多卡，每篇章一张
             for (const node of activeNodes) {
                 if (signal.aborted) break;
                 const label = `${nm}（${node.name}）`;
@@ -313,8 +458,7 @@ async function runGenerate() {
                     logTo('ce_gen_log', label + ' 失败：' + e.message, 'e');
                     continue;
                 }
-                results[label] = postProcessCard(stripThink(stripFence(raw)).trim(), nm);
-                $('ce_output').value = joinSplitCards(results);
+                pushCard(label, postProcessCard(stripThink(stripFence(raw)).trim(), nm));
                 logTo('ce_gen_log', label + ' 完成', 'g');
             }
         }
@@ -323,10 +467,8 @@ async function runGenerate() {
         $('ce_gen').style.display = 'inline-block';
         $('ce_stop').style.display = 'none';
     }
-    state.cardText = (tlMode === 'split') ? joinSplitCards(results) : joinCards(results, state.selectedNames);
-    $('ce_output').value = state.cardText;
-    saveProducts();
-    flash('ce_gen_msg', signal.aborted ? '已停止' : '生成完成');
+    flash('ce_gen_msg', signal.aborted ? '已停止' : `生成完成（${state.cardGroups.length} 张）`);
+    flash('ce_cards_msg', `共 ${state.cardGroups.length} 张卡`);
 
     if (state.cardText) {
         extras.saveHistory({
@@ -336,41 +478,6 @@ async function runGenerate() {
             text: state.cardText,
         });
     }
-}
-
-function joinCards(results, names) {
-    const many = Object.keys(results).length > 1;
-    return Object.entries(results)
-        .map(([nm, t]) => (many ? '# ========== ' + nm + ' ==========\n' : '') + t)
-        .join('\n\n\n');
-}
-
-/** 按篇章拆卡时的拼接（key 已含篇章后缀，直接分段） */
-function joinSplitCards(results) {
-    return Object.entries(results)
-        .map(([nm, t]) => '# ========== ' + nm + ' ==========\n' + t)
-        .join('\n\n\n');
-}
-
-/** 模式 off 的单次生成（带流式回显） */
-async function runOne(prompt, signal, results, nm, names) {
-    try {
-        return await generate(prompt, {
-            signal,
-            useStream: !!settings().useStream,
-            maxCont: settings().autoCont ? 5 : 0,
-            onText: (t) => { $('ce_output').value = joinCards(results, names) + head(nm, names) + t; },
-            logEl: 'ce_gen_log', label: nm,
-        });
-    } catch (e) {
-        if (signal.aborted) return null;
-        logTo('ce_gen_log', nm + ' 失败：' + e.message, 'e');
-        return null;
-    }
-}
-
-function head(nm, names) {
-    return names.length > 1 ? '# ========== ' + nm + ' ==========\n' : '';
 }
 
 function buildCardPrompt(nm, tmpl, cctx, { detail, nsfw, statPanel }) {

@@ -8,11 +8,17 @@ import { toast, flash, logTo } from './util.js';
 import * as writer from './card-writer.js';
 import { $, state, escapeHtml, escapeAttr } from './ui-context.js';
 
-/** 打开预览面板（可编辑后「确认导入到酒馆」） */
-export function openCardPreview() {
+/** 打开预览面板（可编辑后「确认导入到酒馆」）
+ * @param {number} [idx] 指定预览哪一张卡（对应 state.cardGroups 下标）；缺省用合并文本
+ */
+export function openCardPreview(idx) {
     const box = $('ce_card_preview');
-    if (!state.cardText.trim()) { flash('ce_out_msg', '还没有可预览的内容', true); return; }
-    const card = writer.parseCard(state.cardText, { name: state.selectedNames[0] });
+    const groups = state.cardGroups || [];
+    const hasIdx = Number.isInteger(idx) && idx >= 0 && idx < groups.length;
+    const src = hasIdx ? groups[idx].text : state.cardText;
+    if (!src || !String(src).trim()) { flash('ce_out_msg', '还没有可预览的内容', true); return; }
+    const fallbackName = hasIdx ? (groups[idx].name || '') : (state.selectedNames[0] || '');
+    const card = writer.parseCard(src, { name: fallbackName });
     box.style.display = 'block';
     box.innerHTML = `
         <div class="ce-preview-head">角色卡预览（可编辑后导入）</div>
@@ -43,10 +49,23 @@ export function openCardPreview() {
         });
         flash('ce_pv_msg', res.message, !res.ok);
         if (res.ok) {
+            // 回写编辑后的主体到对应卡片
+            if (hasIdx && state.cardGroups[idx]) {
+                state.cardGroups[idx].text = desc;
+                state.cardGroups[idx].name = payload.name;
+                state.cardText = state.cardGroups.map((c) => c.text).join('\n\n\n');
+                writeOutSafe();
+            }
             toast('角色已创建到酒馆：' + payload.name);
             box.style.display = 'none';
         }
     });
+}
+
+/** 安全回写合并视图（ui-card 的输出框可能不在当前 DOM） */
+function writeOutSafe() {
+    const out = document.getElementById('ce_output');
+    if (out) out.value = state.cardText;
 }
 
 export default { openCardPreview };
