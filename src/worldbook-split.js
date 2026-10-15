@@ -86,27 +86,18 @@ export async function classifyEntries(entries, nodes, { signal, onLog } = {}) {
 }
 
 /**
- * 一次写入多本世界书（通用本 + 各篇章本）
- * @param {string} baseName 基础名（如「《刀剑神域》」），实际文件名为 baseName + 后缀
- * @param {{general:Array, chapters:Array<{name,entries}>}} groups 归类结果
+ * 一次写入多本世界书（每本自带名字）
+ * @param {Array<{name:string, entries:Array}>} books 待写入的书单（名字已由调用方定好）
  * @param {'new'|'append'} mode 写入模式
  * @param {{userReplace?:object}} [opts]
  * @returns {Promise<{ok:boolean, books:Array, message:string}>}
  */
-export async function writeSplitWorldbooks(baseName, groups, mode = 'new', opts = {}) {
-    const base = String(baseName || '世界书').trim();
+export async function writeSplitWorldbooks(books, mode = 'new', opts = {}) {
+    const list = (books || []).filter((b) => b && b.name && b.entries && b.entries.length);
+    if (!list.length) return { ok: false, books: [], message: '没有可写入的条目' };
+
     const results = [];
-    const tasks = [];
-
-    if (groups.general && groups.general.length) {
-        tasks.push({ name: base + '·通用设定', entries: groups.general });
-    }
-    (groups.chapters || []).forEach((c) => {
-        if (c.entries && c.entries.length) tasks.push({ name: base + '·' + c.name, entries: c.entries });
-    });
-    if (!tasks.length) return { ok: false, books: [], message: '没有可写入的条目' };
-
-    for (const t of tasks) {
+    for (const t of list) {
         const r = await writeWorldbookToTavern(t.name, t.entries, mode, opts);
         results.push({ bookName: t.name, count: r.count, conflicts: r.conflicts, message: r.message, ok: r.ok });
     }

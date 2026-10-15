@@ -131,7 +131,7 @@ function nsfwLine() {
  * @returns {Promise<{general:Array, chapters:Array<{name:string, entries:Array}>}>}
  */
 export async function generateSplitWorldbook(nodes, {
-    signal, logEl = 'ce_wb_log', onProgress, options = {}, fullText = '', onChapterDone, onGeneralDone,
+    signal, logEl = 'ce_wb_log', onProgress, options = {}, fullText = '', onChapterDone, onGeneralDone, genGeneral = true,
 } = {}) {
     const full = String(fullText || '');
     if (!full.trim()) throw new Error('请先导入小说');
@@ -144,9 +144,13 @@ export async function generateSplitWorldbook(nodes, {
     };
 
     // —— 1. 总本：全局世界观 + 角色总表 + 剧情大纲（3 条常驻）——
-    logTo(logEl, '生成总本（全局世界观 / 角色总表 / 剧情大纲）…');
-    const general = await buildGeneralBook(full, chapters, { signal, logEl });
-    if (onGeneralDone) await onGeneralDone(general);
+    // 未勾选总本时跳过构建，避免「只选了卷却在生成总本」
+    let general = [];
+    if (genGeneral) {
+        logTo(logEl, '生成总本（全局世界观 / 角色总表 / 剧情大纲）…');
+        general = await buildGeneralBook(full, chapters, { signal, logEl });
+        if (onGeneralDone) await onGeneralDone(general);
+    }
 
     // —— 2. 各篇章本：在该篇章正文范围内执行所选任务 ——
     const perChapter = [];

@@ -414,8 +414,73 @@ export function currentCharName() {
     return c?.name2 || 'char';
 }
 
+/* ==================== 弹窗（酒馆原生优先，回落自建） ==================== */
+
+/**
+ * 打开一个自定义 HTML 弹窗，返回用户在弹窗内的输入值。
+ *
+ * 优先用酒馆原生 `callGenericPopup`（风格与酒馆一致）；不可用时回落到
+ * 自建的遮罩弹窗，保证在非酒馆环境也能用。
+ *
+ * @param {object} opts
+ * @param {string} opts.title 标题
+ * @param {string} opts.bodyHtml 弹窗内容 HTML（可含 input/textarea，带 id）
+ * @param {(root:HTMLElement)=>void} [opts.onOpen] 弹窗渲染后回调，用于绑定事件/回填
+ * @param {string} [opts.okLabel] 确定按钮文案
+ * @param {string} [opts.cancelLabel] 取消按钮文案
+ * @param {string} [opts.width] 弹窗宽度（仅自建回落时生效）
+ * @returns {Promise<boolean>} 用户是否点了「确定」（取消/关闭返回 false）
+ */
+export async function popupForm({ title = '', bodyHtml = '', onOpen, okLabel = '确定', cancelLabel = '取消', width = '480px' } = {}) {
+    const c = ctx();
+    const callGenericPopup = c?.callGenericPopup || globalThis.callGenericPopup;
+    const POPUP_TYPE = c?.POPUP_TYPE || globalThis.POPUP_TYPE;
+    // —— 方案 A：酒馆原生弹窗 ——
+    if (typeof callGenericPopup === 'function' && POPUP_TYPE && POPUP_TYPE.TEXT != null) {
+        const root = document.createElement('div');
+        root.className = 'ce-popup-body';
+        root.innerHTML = `<h3 class="ce-popup-title">${title}</h3>${bodyHtml}`;
+        if (typeof onOpen === 'function') onOpen(root);
+        try {
+            const res = await callGenericPopup(root, POPUP_TYPE.TEXT, '', {
+                okButton: okLabel, cancelButton: cancelLabel, wide: true, allowVerticalScrolling: true,
+            });
+            return res === 1 || res === true || res === '1';
+        } catch (e) { /* 回落自建 */ }
+    }
+    // —— 方案 B：自建遮罩弹窗 ——
+    return await popupFallback({ title, bodyHtml, onOpen, okLabel, cancelLabel, width });
+}
+
+/** 自建遮罩弹窗（非酒馆环境 / 原生弹窗不可用时） */
+function popupFallback({ title, bodyHtml, onOpen, okLabel, cancelLabel, width }) {
+    return new Promise((resolve) => {
+        const mask = document.createElement('div');
+        mask.className = 'ce-popup-mask';
+        mask.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        const box = document.createElement('div');
+        box.style.cssText = `background:var(--SmartThemeBlurTintColor,#1e1e1e);color:var(--SmartThemeBodyColor,#eee);border-radius:10px;padding:16px;width:${width};max-width:92vw;max-height:86vh;overflow:auto;`;
+        box.innerHTML = `<h3 style="margin:0 0 8px">${title}</h3>${bodyHtml}`;
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:12px;';
+        const btnOk = document.createElement('button');
+        btnOk.className = 'menu_button'; btnOk.textContent = okLabel;
+        const btnCancel = document.createElement('button');
+        btnCancel.className = 'menu_button'; btnCancel.textContent = cancelLabel;
+        bar.append(btnOk, btnCancel);
+        box.appendChild(bar);
+        mask.appendChild(box);
+        document.body.appendChild(mask);
+        if (typeof onOpen === 'function') onOpen(box);
+        const close = (val) => { mask.remove(); resolve(val); };
+        btnOk.addEventListener('click', () => close(true));
+        btnCancel.addEventListener('click', () => close(false));
+        mask.addEventListener('click', (e) => { if (e.target === mask) close(false); });
+    });
+}
+
 export default {
     ctx, inTavern, hasApi, aiRaw, aiQuiet, substitute,
-    currentUserName, currentCharName,
+    currentUserName, currentCharName, popupForm,
     serverAvailable, serverSave, serverList, serverRead, serverDel,
 };

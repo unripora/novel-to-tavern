@@ -20,6 +20,7 @@ export const state = {
     wbEntries: [],
     wbPreview: '',
     wbGroups: null,
+    wbGroupNames: {},
     running: false,
     controller: null,
     // 日志缓存：切 Tab / 刷新后回显（key = 日志元素 id，value = 文本）
@@ -27,7 +28,7 @@ export const state = {
 };
 
 /** 需要持久化的产物字段（切 Tab 保留内存、刷新存活于 localforage） */
-const PRODUCT_KEYS = ['cardText', 'personaText', 'firstText', 'styleText', 'wbEntries', 'wbPreview', 'wbGroups'];
+const PRODUCT_KEYS = ['cardText', 'personaText', 'firstText', 'styleText', 'wbEntries', 'wbPreview', 'wbGroups', 'wbGroupNames'];
 /** 日志缓存持久化：仅在生成期间防抖存一次，避免频繁写入 */
 let _logSaveTimer = null;
 

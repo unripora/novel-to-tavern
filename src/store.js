@@ -27,6 +27,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     autoCont: true,      // 截断自动续写
     nsfw: false,         // 是否包含 NSFW 内容（世界书等任务读取）
     wbMode: 'whole',     // 世界书生成方式：'whole' 整本生成 | 'chapter' 按篇章生成
+    wbName: '',          // 世界书名称（导入/导出用，刷新后保留）
     model: '',           // 展示用的模型名（实际调用走酒馆连接，仅记录）
     // 数值面板模式
     statPanelCard: false,    // 角色卡：是否开启数值面板模式
