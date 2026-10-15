@@ -8,7 +8,7 @@
 import { getNovel } from './novel.js';
 import { generate } from './generate.js';
 import { stripFence, stripThink, extractJsonArray, logTo } from './util.js';
-import { normalizeNode } from './timeline-core.js';
+import { enforceOrder } from './timeline-core.js';
 
 /**
  * 解析「故事梗概」文本，提取篇章清单
@@ -201,9 +201,9 @@ export function fuzzyFind(text, kw) {
  * 流程：
  *   1. 解析梗概得到篇章清单（篇名 + 概述）——**顺序以梗概为准，不由 AI 决定**
  *   2. 模糊检索：从篇名抽关键词，在正文中模糊定位（卷标志行 → 反向包含 → 精确包含）
- *   3. AI 细化边界：仍未命中的篇章，把「梗概 + 参考文档 + 抽样正文」交给 AI，
- *      请它给出「正文中可检索的关键词」，再回正文模糊检索（比直接要占比更精确）
- *   4. 按梗概原顺序切分；仅对「完全无位置」的篇章按序插值兜底，不再打乱顺序
+ *   3. AI 复核边界：把「梗概 + 参考文档 + 抽样正文」交给 AI，请它为**每个篇章**（含本地已命中者）
+ *      给出「正文中可检索的关键词」，再回正文模糊检索；AI 定位成功则覆盖本地结果以校正偏差
+ *   4. 按梗概原顺序切分；仅对「最终仍无位置」的篇章按序插值兜底，不再打乱顺序
  *
  * @param {string} raw 梗概原文
  * @param {{signal?:AbortSignal, onLog?:(msg:string,cls?:string)=>void, refDoc?:string}} [opts]
@@ -237,60 +237,59 @@ export async function divideBySynopsis(raw, { signal, onLog, refDoc } = {}) {
             log('篇章「' + it.name + '」命中「' + hit.hit + '」于 ' + (hit.pos / textLen * 100).toFixed(1) + '%', 'g');
         } else {
             missed.push(it.name);
-            log('篇章「' + it.name + '」未命中，将交由 AI 细化边界', 'e');
+            log('篇章「' + it.name + '」未命中，将交由 AI 复核定位', 'e');
         }
     }
 
-    // ② AI 细化边界：让 AI 给出「正文中可检索的关键词」，再回正文模糊检索
+    // ② AI 复核边界：对**全部篇章**（不只未命中）请 AI 给出「正文中可检索的关键词」，
+    //    回正文模糊检索；AI 定位成功则覆盖本地结果（含校正已命中的偏差）。
     let refined = false;
-    if (missed.length) {
-        try {
-            log('提交 AI 细化未命中篇章的边界…');
-            const sample = sampleForTimeline(text);
-            const prompt = buildSynopsisPrompt(items);
-            const userMsg = prompt +
-                (ref ? ('\n\n=== 参考文档（作品资料，供定位参考）===\n' + ref) : '') +
-                '\n\n=== 小说内容（抽样）===\n' + sample;
-            const rawAi = await generate([
-                { role: 'system', content: '你是精通叙事结构与文本检索的文学分析师。' },
-                { role: 'user', content: userMsg },
-            ], { signal, useStream: false, maxCont: 2 });
+    try {
+        log('提交 AI 复核全部篇章的边界…' + (missed.length ? ('（其中 ' + missed.length + ' 个本地未命中）') : ''));
+        const sample = sampleForTimeline(text);
+        const prompt = buildSynopsisPrompt(items);
+        const userMsg = prompt +
+            (ref ? ('\n\n=== 参考文档（作品资料，供定位参考）===\n' + ref) : '') +
+            '\n\n=== 小说内容（抽样）===\n' + sample;
+        const rawAi = await generate([
+            { role: 'system', content: '你是精通叙事结构与文本检索的文学分析师。' },
+            { role: 'user', content: userMsg },
+        ], { signal, useStream: false, maxCont: 2 });
 
-            const arr = extractJsonArray(stripThink(stripFence(rawAi)));
-            if (arr.length) {
-                for (let i = 0; i < items.length; i++) {
-                    if (items[i].pos != null) continue;
-                    const kw = String((arr[i] && (arr[i].keyword || arr[i].key || arr[i].name)) || '').trim();
-                    if (!kw) continue;
-                    const hit = fuzzyFind(text, kw);
-                    if (hit) {
-                        items[i].pos = hit.pos;
-                        log('AI 关键词「' + kw + '」命中「' + hit.hit + '」于 ' + (hit.pos / textLen * 100).toFixed(1) + '%', 'g');
-                    }
-                }
-                refined = true;
+        const arr = extractJsonArray(stripThink(stripFence(rawAi)));
+        if (arr.length) {
+            for (let i = 0; i < items.length; i++) {
+                const kw = String((arr[i] && (arr[i].keyword || arr[i].key || arr[i].name)) || '').trim();
+                if (!kw) continue;      // AI 未给出关键词：保留本地结果（已命中保留，未命中留给插值）
+                const hit = fuzzyFind(text, kw);
+                if (!hit) { log('AI 关键词「' + kw + '」未能在正文检索到，保留原结果', 'e'); continue; }
+                const prevPos = items[i].pos;
+                const moved = prevPos != null && prevPos !== hit.pos;
+                items[i].pos = hit.pos;
+                delete items[i].estimated;      // 已被 AI 定位，取消插值标记
+                log('篇章「' + items[i].name + '」' + (moved ? '边界经 AI 校正' : 'AI 定位') +
+                    '，命中「' + hit.hit + '」于 ' + (hit.pos / textLen * 100).toFixed(1) + '%' +
+                    (moved ? '（原 ' + (prevPos / textLen * 100).toFixed(1) + '%）' : ''), 'g');
             }
-        } catch (e) {
-            log('AI 边界细化失败（' + e.message + '），未命中的篇章将按顺序插值', 'e');
+            refined = true;
         }
+    } catch (e) {
+        log('AI 边界复核失败（' + e.message + '），未命中的篇章将按顺序插值', 'e');
     }
 
     // ③ 按「梗概原顺序」切分：保持 items 顺序，仅对无位置者按前后已知位置插值
     fillMissingPositions(items, textLen);
 
-    const nodes = items.map((it, i) => normalizeNode({
+    // 强制单调有序：后一篇开头不早于前一篇末尾（容差内允许略早，因篇章边界本身模糊）
+    const nodes = enforceOrder(items.map((it, i) => ({
         name: it.name,
         summary: it.summary,
         start: it.pos,
         end: (i + 1 < items.length) ? items[i + 1].pos : textLen,
-    }, textLen));
+    })), textLen);
 
     // 首篇章起点归零（正文开头可能早于第一个标志行）
     if (nodes.length && nodes[0].start > 0) nodes[0].start = 0;
-    // 保证区间单调：后一篇起点不得早于前一篇
-    for (let i = 1; i < nodes.length; i++) {
-        if (nodes[i].start < nodes[i - 1].start) nodes[i].start = nodes[i - 1].start;
-    }
 
     const fallback = items.filter((it) => it.estimated).length;
     log('梗概划分完成，共 ' + nodes.length + ' 个篇章' + (fallback ? '（' + fallback + ' 个按顺序插值）' : ''), 'g');
@@ -323,15 +322,17 @@ function fillMissingPositions(items, textLen) {
     }
 }
 
-/** 梗概划分的 AI 边界细化提示词（顺序已由梗概锁定，只求可检索关键词） */
+/** 梗概划分的 AI 边界复核提示词（顺序已由梗概锁定，只求可检索关键词） */
 function buildSynopsisPrompt(items) {
     const list = items.map((it, i) =>
         (i + 1) + '. 「' + it.name + '」：' + (it.summary || '（无概述）').replace(/\n+/g, ' ')
     ).join('\n');
     return '下面给出这部小说的**篇章清单**（顺序已确定，请勿改动顺序）以及小说抽样内容。\n' +
-        '你的任务**不是重新划分篇章**，而是为每个篇章给出一个**能在这部小说正文里直接检索到的关键词**' +
+        '你的任务**不是重新划分篇章**，而是为**每一个篇章**给出一个**能在这部小说正文里直接检索到的关键词**' +
         '（例如卷名、篇章标题、专有名词），用于在正文中定位该篇章的起始位置。\n' +
-        '关键词要简短、唯一，优先取正文中原样出现的词（如卷名「妖精之舞」）。若无法确定，留空字符串。\n\n' +
+        '关键词要简短、唯一，优先取正文中原样出现的词（如卷名「妖精之舞」）。\n' +
+        '该关键词应尽量指向**该篇章在正文中的起始处**；由于篇章按时间先后排列，' +
+        '后一个篇章的起始必须晚于前一个篇章。若确实无法确定，留空字符串。\n\n' +
         '篇章清单（顺序固定）：\n' + list + '\n\n' +
         '只输出 JSON 数组，元素顺序与篇章清单**完全一致**，形如：\n' +
         '[{"keyword":"艾恩葛朗特"},{"keyword":"妖精之舞"},{"keyword":""}]\n' +

@@ -71,7 +71,8 @@ export function renderWorldTab(box) {
                 <label class="ce-label">按卷生成（来自时间线）</label>
                 <p class="ce-faint">
                     总本 = 全局世界观 + 角色总表 + 剧情大纲（必定生成，可取消跳过）；
-                    各卷 = 在该卷正文范围内按上面勾选的任务生成。
+                    各卷按上面勾选的任务生成：「提取条目」「剧情分段」限定在该卷正文范围内，
+                    其余（共享背景 / 配角群像 / 人物列表 / 剧情大纲）为全书范围。
                     每卷完成即独立落盘为 <code>&lt;记录名&gt;/worldbook/&lt;卷名&gt;.json</code>，可单独导入酒馆。
                     「已生成」以落盘文件是否存在为准。
                 </p>
@@ -111,8 +112,14 @@ export function renderWorldTab(box) {
     $('ce_wb_write_new').addEventListener('click', () => writeWorld('new'));
     $('ce_wb_write_append').addEventListener('click', () => writeWorld('append'));
     $('ce_wb_dl').addEventListener('click', () => {
+        // 先回读预览框（用户可能手改过），与「写入酒馆」保持一致，避免导出过期条目
+        try {
+            const parsed = worldbook.parseWbPreview($('ce_wb_out').value);
+            if (parsed && parsed.length) state.wbEntries = parsed;
+        } catch (e) { /* 解析失败：沿用原条目 */ }
+        // buildWbJson 已返回 JSON 字符串，直接下载，切勿再次 JSON.stringify
         const json = worldbook.buildWbJson(state.wbEntries, {});
-        downloadText(JSON.stringify(json, null, 2), ($('ce_wb_name').value || '世界书') + '.json', 'application/json');
+        downloadText(json, ($('ce_wb_name').value || '世界书') + '.json', 'application/json');
     });
     $('ce_wb_clear').addEventListener('click', () => {
         state.wbEntries = []; state.wbPreview = ''; $('ce_wb_out').value = '';
@@ -152,7 +159,7 @@ function bindWorldModeUI(nodes) {
         persist();
         if (m === 'chapter') {
             hint.textContent = nodes.length ? `（已建立 ${nodes.length} 个卷）` : '（尚未建立时间线，请去「时间线」页划分）';
-            tip.textContent = '按卷生成：总本 = 全局世界观 + 角色总表 + 剧情大纲；各卷按上面勾选的任务在「该卷正文范围内」生成。';
+            tip.textContent = '按卷生成：总本 = 全局世界观 + 角色总表 + 剧情大纲；各卷中「提取条目」「剧情分段」限定在该卷正文范围内，其余任务为全书范围。';
             writeSec.style.display = 'none';
             volSec.style.display = 'block';
             groupsSec.style.display = state.wbGroups ? 'block' : 'none';
@@ -179,7 +186,7 @@ async function renderVolList(nodes) {
     const box = $('ce_wb_vols');
     if (!box) return;
     const rec = currentRec();
-    const done = await persistMod.doneChapterSet(rec);
+    const done = await persistMod.doneChapterSet(rec, (nodes || []).map((n) => n.name));
     const rows = [];
     // 总本（固定项，默认勾选）
     const wholeDone = !!done['_whole'];
@@ -207,7 +214,8 @@ function toggleAllVols(on) {
 /** 只选未生成的卷（总本一并选中，除非已生成） */
 async function selectUndoneVols() {
     const rec = currentRec();
-    const done = await persistMod.doneChapterSet(rec);
+    const names = (timeline.getTimeline().nodes || []).map((n) => n.name);
+    const done = await persistMod.doneChapterSet(rec, names);
     document.querySelectorAll('.ce_wb_vol').forEach((c) => {
         c.checked = !done[c.dataset.name];
     });
@@ -246,8 +254,8 @@ async function runChapterWorldbook() {
         flash('ce_wb_msg', '请先勾选要生成的内容', true); return;
     }
 
-    // 跳过已生成（除非强制重跑）——判定以落盘文件为准
-    const done = await persistMod.doneChapterSet(rec);
+    // 跳过已生成（除非强制重跑）——判定以落盘文件为准（本地键优先，插件关闭也生效）
+    const done = await persistMod.doneChapterSet(rec, allNodes.map((n) => n.name));
     const skipWhole = !force && !!done['_whole'];
     const runNodes = force ? wantVols : wantVols.filter((n) => !done[n.name]);
     const skipped = wantVols.length - runNodes.length + (wantWhole && skipWhole ? 1 : 0);
@@ -372,7 +380,11 @@ async function doLoadIndex() {
     try {
         const rec = currentRec();
         const whole = await persistMod.loadChapterBook(rec, '_whole');
-        const names = await persistMod.listChapterBooks(rec);
+        // 候选卷名 = 时间线卷名 ∪ 服务器文件清单：
+        // 前者覆盖「无 Server Plugin，仅本地缓存」；后者可发现不在当前时间线里的历史卷
+        const serverNames = await persistMod.listChapterBooks(rec);
+        const tlNames = (timeline.getTimeline().nodes || []).map((n) => n.name);
+        const names = [...new Set([...tlNames, ...serverNames])];
         const chapters = [];
         for (const name of names) {
             const book = await persistMod.loadChapterBook(rec, name);

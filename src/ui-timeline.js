@@ -51,7 +51,7 @@ export function renderTimelineTab(box) {
                     placeholder="可粘贴该作品的目录、卷名列表、设定资料等，供 AI 更准确地定位各篇章边界（顺序仍以梗概为准）。"></textarea>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_tl_syn_run">梗概划分</button>
-                    <span class="ce-faint">篇章顺序以梗概为准；先模糊检索篇名与卷标志行，未命中的交给 AI 结合参考文档细化边界</span>
+                    <span class="ce-faint">篇章顺序以梗概为准；先模糊检索篇名与卷标志行，再由 AI 复核全部篇章边界（给出可检索关键词以校正偏差）</span>
                 </div>
             </div>
             <div class="ce-section">
@@ -203,7 +203,7 @@ async function doDivideBySynopsis() {
             refDoc,
         });
         timeline.saveTimeline({ nodes, locked: false });
-        flash('ce_tl_msg', `已按梗概划分 ${nodes.length} 个篇章` + (missed.length ? `，${missed.length} 个由 AI/均分估算` : ''), missed.length > 0);
+        flash('ce_tl_msg', `已按梗概划分 ${nodes.length} 个篇章` + (missed.length ? `，${missed.length} 个本地未命中已交 AI 复核` : ''), missed.length > 0);
         rerender('timeline');
     } catch (e) {
         flash('ce_tl_msg', '失败：' + e.message, true);

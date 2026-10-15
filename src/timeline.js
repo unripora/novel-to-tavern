@@ -17,7 +17,7 @@
 import { getNovel } from './novel.js';
 import { generate } from './generate.js';
 import { stripFence, stripThink, extractJsonArray, logTo } from './util.js';
-import { normalizeNode, normalizeTimeline, getTimeline, saveTimeline, clearTimeline, isLocked, setLocked } from './timeline-core.js';
+import { normalizeNode, normalizeTimeline, enforceOrder, getTimeline, saveTimeline, clearTimeline, isLocked, setLocked } from './timeline-core.js';
 import {
     sampleForTimeline, parseSynopsis, divideBySynopsis, normalizeSynopsisText,
     coreKeyword, coreKeywords, fuzzyFind,
@@ -51,7 +51,7 @@ export async function autoDivide({ signal, onLog } = {}) {
     if (!arr.length) throw new Error('AI 未返回有效的章节划分，请重试或手动添加');
 
     const textLen = text.length;
-    const nodes = arr.map((it, i) => {
+    const rawNodes = arr.map((it, i) => {
         // 兼容 AI 返回 {name, summary, ratio} 或 {name, start_pct, end_pct}
         const name = it.name || it.title || ('篇章' + (i + 1));
         const summary = it.summary || it.desc || '';
@@ -63,13 +63,15 @@ export async function autoDivide({ signal, onLog } = {}) {
             endPct = (i + 1) / arr.length;
         }
         if (!Number.isFinite(endPct)) endPct = (i + 1) / arr.length;
-        return normalizeNode({
+        return {
             name,
             summary,
             start: Math.round(startPct * textLen),
             end: Math.round(endPct * textLen),
-        }, textLen);
+        };
     });
+    // 强制「后一篇开头不早于前一篇末尾」（AI 给的占比可能倒挂/重叠，容差内允许略早）
+    const nodes = enforceOrder(rawNodes, textLen);
 
     log('划分完成，共 ' + nodes.length + ' 个篇章（请校对后再使用）', 'g');
     return nodes;
@@ -113,17 +115,14 @@ export function divideByEvents(events, { onLog } = {}) {
     found.sort((a, b) => a.pos - b.pos);
 
     // 相邻事件之间为一个篇章，篇名用后一个事件名；最后一个事件到末尾为末篇章
-    const nodes = [];
-    for (let i = 0; i < found.length; i++) {
-        const start = i === 0 ? 0 : found[i].pos;
-        const end = (i + 1 < found.length) ? found[i + 1].pos : textLen;
-        nodes.push(normalizeNode({
-            name: found[i].name,
-            summary: '',
-            start,
-            end,
-        }, textLen));
-    }
+    const raw = found.map((f, i) => ({
+        name: f.name,
+        summary: '',
+        start: i === 0 ? 0 : f.pos,
+        end: (i + 1 < found.length) ? found[i + 1].pos : textLen,
+    }));
+    // 事件命中位置可能重复，强制单调有序（后一篇开头不早于前一篇末尾）
+    const nodes = enforceOrder(raw, textLen);
 
     log('检索完成，共 ' + nodes.length + ' 个篇章' + (missed.length ? ('（' + missed.length + ' 个事件未命中）') : ''), 'g');
     return { nodes, missed };
@@ -173,7 +172,7 @@ export function contextInNode(name, aliases, node, cap = 60000) {
 }
 
 // 统一对外导出（保持与拆分前一致的 API）
-export { getTimeline, saveTimeline, clearTimeline, isLocked, setLocked, normalizeNode, normalizeTimeline } from './timeline-core.js';
+export { getTimeline, saveTimeline, clearTimeline, isLocked, setLocked, normalizeNode, normalizeTimeline, enforceOrder } from './timeline-core.js';
 export {
     parseSynopsis, coreKeyword, coreKeywords, fuzzyFind,
     normalizeSynopsisText, divideBySynopsis, sampleForTimeline,
@@ -181,7 +180,7 @@ export {
 
 export default {
     getTimeline, saveTimeline, clearTimeline, isLocked, setLocked,
-    normalizeNode, normalizeTimeline, autoDivide, divideByEvents,
+    normalizeNode, normalizeTimeline, enforceOrder, autoDivide, divideByEvents,
     parseSynopsis, divideBySynopsis, normalizeSynopsisText,
     coreKeyword, coreKeywords, fuzzyFind,
     nodeText, contextInNode,

@@ -192,28 +192,28 @@ async function tasksInRange(seg, node, opt, { signal, logEl }) {
         out.push(...list);
     }
 
-    // ③ 配角群像（与范围弱相关，复用整本内核；用本篇章的取样）
+    // ③ 配角群像（复用整本内核：基于全书取样，非本篇章范围）
     if (opt.minor) {
         logTo(logEl, `「${label}」▶ 配角群像`);
         const list = await runOptional(() => wbMinorCore({ signal, mode: opt.minorMode, cap: 20 }), '配角群像', logEl);
         out.push(...(list || []));
     }
 
-    // ④ 共享背景（本篇章的世界大纲，一条常驻）
+    // ④ 共享背景（复用整本内核：基于全书取样；条目标题按篇章加前缀）
     if (opt.bg) {
         logTo(logEl, `「${label}」▶ 共享背景`);
         const one = await runOptional(() => wbBgCore({ signal }), '共享背景', logEl);
         if (one) out.push({ ...one, title: label + '·背景大纲' });
     }
 
-    // ⑤ 人物列表（本篇章相关人物，一条常驻）
+    // ⑤ 人物列表（复用整本内核：基于全书取样；条目标题按篇章加前缀）
     if (opt.chars) {
         logTo(logEl, `「${label}」▶ 人物列表`);
         const one = await runOptional(() => wbConstantEntry({ signal, kind: 'chars' }), '人物列表', logEl);
         if (one) out.push({ ...one, category: '人物', title: label + '·人物列表', constant: false, keys: one.keys || [] });
     }
 
-    // ⑥ 剧情大纲（本篇章大纲，一条常驻）
+    // ⑥ 剧情大纲（复用整本内核：基于全书取样；条目标题按篇章加前缀）
     if (opt.plotlist) {
         logTo(logEl, `「${label}」▶ 剧情大纲`);
         const one = await runOptional(() => wbConstantEntry({ signal, kind: 'plot' }), '剧情大纲', logEl);

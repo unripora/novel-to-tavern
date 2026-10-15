@@ -145,7 +145,7 @@ export function syncWbFromPreview(previewText, entries, onShrink) {
     if (!txt.trim()) return entries;
     if (entries.length && txt.trim() === buildWbPreview(entries).trim()) return entries;   // 没动过
     const parsed = parseWbPreview(txt);
-    if (!parsed.length) { logTo('wbLog', '预览框内容无法解析成条目（格式需保持「===== 序号. 标题 =====」那套），导出将沿用上次的结果', 'e'); return entries; }
+    if (!parsed.length) { logTo('ce_wb_log', '预览框内容无法解析成条目（格式需保持「===== 序号. 标题 =====」那套），导出将沿用上次的结果', 'e'); return entries; }
     // 防丢失：解析结果比原来少很多时，多半是手滑删坏了预览，交由上层确认，避免静默丢条目
     if (entries.length >= 5 && parsed.length < entries.length * 0.6 && !(onShrink ? onShrink(parsed, entries) : true)) return entries;
     return parsed;
@@ -177,13 +177,13 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
     let cap, map, startI;
     if (resuming) {
         cap = state.cap; map = state.map; startI = state.next;
-        logTo('wbLog', '从第 ' + (startI + 1) + '/' + cap + ' 段继续提取…');
+        logTo('ce_wb_log', '从第 ' + (startI + 1) + '/' + cap + ' 段继续提取…');
     } else {
         cap = Math.min(totalChunks, scanCapOf());
         map = new Map(); startI = 0;
         state = { len: text.length, size, cap, next: 0, map };
-        if (totalChunks > cap) logTo('wbLog', '小说较长（共 ' + totalChunks + ' 段），仅提取前 ' + cap + ' 段。', 'e');
-        logTo('wbLog', '共 ' + cap + ' 段，开始提取…');
+        if (totalChunks > cap) logTo('ce_wb_log', '小说较长（共 ' + totalChunks + ' 段），仅提取前 ' + cap + ' 段。', 'e');
+        logTo('ce_wb_log', '共 ' + cap + ' 段，开始提取…');
     }
     const nsfw = nsfwLineWorld();
     for (let i = startI; i < cap; i++) {
@@ -201,21 +201,21 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
             'constant：整体世界观/总背景 → true（建议常驻）；具体的势力/地点/术语/物品 → false（关键词触发）。\n' +
             '只输出 JSON 数组，不要代码块、不要解释。该段没有明确设定就输出 []。\n\n文本：\n' + chunk;
         let raw = '';
-        const onWait = (n, code, w) => logTo('wbLog', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
+        const onWait = (n, code, w) => logTo('ce_wb_log', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
         try {
             raw = await generate(userMsgs(prompt), {
                 signal, onWait, useStream: false,
-                maxCont: settings().autoCont ? 3 : 0, logEl: 'wbLog', label: `第${i + 1}段`,
+                maxCont: settings().autoCont ? 3 : 0, logEl: 'ce_wb_log', label: `第${i + 1}段`,
             });
         } catch (err) {
-            if (isAbort(err, signal)) { logTo('wbLog', '已停止', 'e'); break; }
-            logTo('wbLog', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
+            if (isAbort(err, signal)) { logTo('ce_wb_log', '已停止', 'e'); break; }
+            logTo('ce_wb_log', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
             state.next = i + 1; if (onSegment) onSegment(state); continue;
         }
         const arr = extractJsonArray(raw);
         if (!Array.isArray(arr) || !arr.length) {
             const snip = String(raw).trim().replace(/\s+/g, ' ').slice(0, 90);
-            logTo('wbLog', '第' + (i + 1) + '段解析失败，模型返回：' + (snip ? '「' + snip + '」' : '（空，可能被安全过滤挡了）'), 'e');
+            logTo('ce_wb_log', '第' + (i + 1) + '段解析失败，模型返回：' + (snip ? '「' + snip + '」' : '（空，可能被安全过滤挡了）'), 'e');
             state.next = i + 1; if (onSegment) onSegment(state); continue;
         }
         for (const e of arr) {
@@ -235,7 +235,7 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
         }
         state.next = i + 1;
         if (onSegment) onSegment(state);
-        logTo('wbLog', '第' + (i + 1) + '段 → 累计 ' + map.size + ' 条', 'g');
+        logTo('ce_wb_log', '第' + (i + 1) + '段 → 累计 ' + map.size + ' 条', 'g');
     }
     const merged = [...map.values()];
     const done = state.next >= cap;
@@ -250,9 +250,9 @@ export async function wbBgCore({ signal, onText } = {}) {
         '通读下面这部小说（节选），总结所有角色共享的时代背景、世界大环境、社会规则、集体经历与公共设定——不要写任何单一角色的个人档案。\n' +
         '浓缩成一段适合做「常驻世界书条目」的背景大纲，让 AI 始终了解故事发生的大框架，从而角色卡里不必重复这些共同信息。\n' +
         '只依据原文，简洁准确，不编造。直接输出这段背景大纲正文，不要标题、不要解释、不要代码块。\n\n=== 小说节选 ===\n' + sample;
-    const raw = await generate(userMsgs(prompt), { signal, useStream: !!settings().useStream, onText, maxCont: settings().autoCont ? 5 : 0, logEl: 'wbLog', label: '共享背景' });
+    const raw = await generate(userMsgs(prompt), { signal, useStream: !!settings().useStream, onText, maxCont: settings().autoCont ? 5 : 0, logEl: 'ce_wb_log', label: '共享背景' });
     const content = stripFence(stripThink(raw)).trim();
-    if (!content) { logTo('wbLog', '共享背景：没提取到内容', 'e'); return null; }
+    if (!content) { logTo('ce_wb_log', '共享背景：没提取到内容', 'e'); return null; }
     return { category: '共享背景', title: '共享背景 / 世界大纲', keys: [], content, constant: true };
 }
 
@@ -261,7 +261,7 @@ export async function wbBgCore({ signal, onText } = {}) {
  */
 export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, maxTokens } = {}) {
     const characters = getCharacters();
-    if (!characters.length) { logTo('wbLog', '配角：请先扫描/添加角色，跳过', 'e'); return []; }
+    if (!characters.length) { logTo('ce_wb_log', '配角：请先扫描/添加角色，跳过', 'e'); return []; }
     const maxT = Math.max(4000, Number(maxTokens) || 4000);
     const sample = sampleForStyle(getNovel().trim());
     const capN = Math.max(1, Number(cap) || 20);
@@ -275,9 +275,9 @@ export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, max
             '从配角里挑最重要的，**最多 ' + capN + ' 个**。每个配角一条，写清身份、性格、地位、与主角及彼此的关系，有戏份的尽量详细。\n' +
             '只依据原文、不编造。输出 JSON 数组 [{"name":"配角名","keys":["触发关键词2~4个"],"content":"介绍"}]，只输出 JSON，不要代码块、不要解释。\n\n' +
             '角色清单：\n' + list + '\n\n=== 小说节选 ===\n' + sample;
-        const raw = await generate(userMsgs(prompt), { maxTokens: Math.max(maxT, 12000), useStream: stream, signal, onText, maxCont: cont, logEl: 'wbLog', label: '逐个配角' });
+        const raw = await generate(userMsgs(prompt), { maxTokens: Math.max(maxT, 12000), useStream: stream, signal, onText, maxCont: cont, logEl: 'ce_wb_log', label: '逐个配角' });
         const arr = extractJsonArray(stripFence(stripThink(raw)));
-        if (!Array.isArray(arr) || !arr.length) { logTo('wbLog', '逐个配角：没解析出条目', 'e'); return []; }
+        if (!Array.isArray(arr) || !arr.length) { logTo('ce_wb_log', '逐个配角：没解析出条目', 'e'); return []; }
         const out = [];
         for (const e of arr) {
             if (!e || !e.name || !e.content) continue;
@@ -295,9 +295,9 @@ export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, max
         '写法分层：真正跑龙套、出场极少的，可以一两句带过；**其余有戏份的配角，每人至少 100 字**，写清身份、性格、地位、与主角及彼此的关系——他们是这个世界里活生生的人，不是工具人，别糊弄。\n' +
         '只依据原文、不编造，原文没写的就不写。用「· 名字：介绍」的形式，直接输出正文，不要解释、不要代码块。\n\n' +
         '角色清单：\n' + list + '\n\n=== 小说节选 ===\n' + sample;
-    const raw = await generate(userMsgs(prompt), { maxTokens: maxT, useStream: stream, signal, onText, maxCont: cont, logEl: 'wbLog', label: '配角群像' });
+    const raw = await generate(userMsgs(prompt), { maxTokens: maxT, useStream: stream, signal, onText, maxCont: cont, logEl: 'ce_wb_log', label: '配角群像' });
     const content = stripFence(stripThink(raw)).trim();
-    if (!content) { logTo('wbLog', '配角群像：没归纳出内容', 'e'); return []; }
+    if (!content) { logTo('ce_wb_log', '配角群像：没归纳出内容', 'e'); return []; }
     const keys = [];
     characters.forEach((c) => { keys.push(c.name); (c.aliases || []).forEach((a) => keys.push(a)); });
     return [{ category: '人物', title: '配角群像合集', keys: uniq(keys).slice(0, 80), content, constant: false }];
@@ -312,8 +312,8 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
     const cap = Math.min(totalChunks, scanCapOf());
     const resuming = state && state.len === text.length && state.cap === cap && state.next < cap;
     const startI = resuming ? state.next : 0;
-    if (resuming) logTo('wbLog', '剧情分段：从第 ' + (startI + 1) + '/' + cap + ' 段继续…');
-    else { state = { len: text.length, cap, next: 0 }; logTo('wbLog', '剧情分段：共 ' + cap + ' 段，开始…'); }
+    if (resuming) logTo('ce_wb_log', '剧情分段：从第 ' + (startI + 1) + '/' + cap + ' 段继续…');
+    else { state = { len: text.length, cap, next: 0 }; logTo('ce_wb_log', '剧情分段：共 ' + cap + ' 段，开始…'); }
     const nsfw = settings().nsfw ? '可包含成人向剧情。' : '不必回避剧情，但不要展开露骨性描写。';
     let addedTotal = 0;
     for (let i = startI; i < cap; i++) {
@@ -330,21 +330,21 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
             nsfw + '\n' +
             '只依据原文、不编造。输出 JSON 数组 [{"title":"","keys":[],"content":""}]，只输出 JSON，不要代码块、不要解释。该段无实质剧情就输出 []。\n\n文本：\n' + chunk;
         let raw = '';
-        const onWait = (n, code, w) => logTo('wbLog', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
+        const onWait = (n, code, w) => logTo('ce_wb_log', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
         try {
             raw = await generate(userMsgs(prompt), {
                 signal, onWait, useStream: false,
-                maxCont: settings().autoCont ? 3 : 0, logEl: 'wbLog', label: `第${i + 1}段`,
+                maxCont: settings().autoCont ? 3 : 0, logEl: 'ce_wb_log', label: `第${i + 1}段`,
             });
         } catch (err) {
-            if (isAbort(err, signal)) { logTo('wbLog', '已停止', 'e'); break; }
-            logTo('wbLog', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
+            if (isAbort(err, signal)) { logTo('ce_wb_log', '已停止', 'e'); break; }
+            logTo('ce_wb_log', '第' + (i + 1) + '段请求失败：' + err.message, 'e');
             state.next = i + 1; if (onSegment) onSegment(state); continue;
         }
         const arr = extractJsonArray(raw);
         if (!Array.isArray(arr)) {
             const snip = String(raw).trim().replace(/\s+/g, ' ').slice(0, 90);
-            logTo('wbLog', '第' + (i + 1) + '段解析失败，模型返回：' + (snip ? '「' + snip + '」' : '（空，多半被安全过滤挡了，或 max_tokens 被思考用光）'), 'e');
+            logTo('ce_wb_log', '第' + (i + 1) + '段解析失败，模型返回：' + (snip ? '「' + snip + '」' : '（空，多半被安全过滤挡了，或 max_tokens 被思考用光）'), 'e');
             state.next = i + 1; if (onSegment) onSegment(state); continue;
         }
         // 即时写入，停了也保留已生成的
@@ -360,10 +360,10 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
         }
         state.next = i + 1;
         if (onSegment) onSegment(state);
-        logTo('wbLog', '第' + (i + 1) + '段 → 剧情条目累计 ' + addedTotal, 'g');
+        logTo('ce_wb_log', '第' + (i + 1) + '段 → 剧情条目累计 ' + addedTotal, 'g');
     }
     const done = state.next >= cap;
-    if (done) logTo('wbLog', '剧情分段完成，新增 ' + addedTotal + ' 条（共 ' + entries.length + ' 条）', addedTotal ? 'g' : 'e');
+    if (done) logTo('ce_wb_log', '剧情分段完成，新增 ' + addedTotal + ' 条（共 ' + entries.length + ' 条）', addedTotal ? 'g' : 'e');
     return { entries, state: done ? null : state, done, added: addedTotal };
 }
 
@@ -383,11 +383,11 @@ export async function wbConstantEntry({ signal, onText, kind = 'chars', maxToken
         title = '剧情大纲';
         prompt = '下面是小说节选。请生成一份**剧情大纲**，作为始终注入的常驻设定：按时间顺序概述主线走向与关键转折（几段即可），让 AI 始终了解故事全貌。只依据原文、不编造。直接输出大纲正文，不要解释、不要代码块。\n\n=== 小说节选 ===\n' + sample;
     }
-    const raw = await generate(userMsgs(prompt), { maxTokens: maxT, useStream: stream, signal, onText, maxCont: cont, logEl: 'wbLog', label: title });
+    const raw = await generate(userMsgs(prompt), { maxTokens: maxT, useStream: stream, signal, onText, maxCont: cont, logEl: 'ce_wb_log', label: title });
     const content = stripFence(stripThink(raw)).trim();
     if (!content) {
         const snip = String(raw).trim().replace(/\s+/g, ' ').slice(0, 90);
-        logTo('wbLog', title + '：没生成内容。模型返回：' + (snip ? '「' + snip + '」' : '（空，多半被安全过滤挡了，或 max_tokens 被思考用光）'), 'e');
+        logTo('ce_wb_log', title + '：没生成内容。模型返回：' + (snip ? '「' + snip + '」' : '（空，多半被安全过滤挡了，或 max_tokens 被思考用光）'), 'e');
         return null;
     }
     return { category: '总纲', title, keys: [], content, constant: true };   // 蓝灯常驻
