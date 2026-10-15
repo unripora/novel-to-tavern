@@ -88,8 +88,7 @@ card-extractor/
     ├── ui-context.js      # UI 共享状态
     ├── ui-novel.js        # 小说 Tab
     ├── ui-timeline.js     # 时间线 Tab
-    ├── ui-chars.js        # 角色 Tab
-    ├── ui-card.js         # 角色卡 Tab
+    ├── ui-card.js         # 角色卡 Tab（含角色选择/扫描）
     └── ui-misc.js         # 其余 Tab
 ```
 

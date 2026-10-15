@@ -15,6 +15,7 @@ export const state = {
     curTpl: 0,
     cardText: '',
     cardGroups: [],
+    cardViewIdx: null,
     personaText: '',
     firstText: '',
     styleText: '',

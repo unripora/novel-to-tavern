@@ -3,7 +3,7 @@
  * （世界书 Tab 已拆至 ui-world.js）
  */
 
-import { toast, flash, clearLog } from './util.js';
+import { toast, flash, logTo, clearLog } from './util.js';
 import { settings, persist } from './store.js';
 import * as extras from './extras.js';
 import * as persistMod from './persist.js';
@@ -82,6 +82,7 @@ export function renderPersonaTab(box) {
             state.personaText = text;
             $('ce_pn_out').value = text;
             saveProducts();
+            logTo('ce_pn_log', '✅ 所有任务已完成', 'g');
             flash('ce_pn_msg', '完成');
         } catch (e) { flash('ce_pn_msg', '失败：' + e.message, true); }
     });
@@ -145,6 +146,7 @@ export function renderStyleTab(box) {
             state.styleText = text;
             $('ce_style_out').value = text;
             saveProducts();
+            logTo('ce_style_log', '✅ 所有任务已完成', 'g');
             flash('ce_style_msg', '完成');
         } catch (e) { flash('ce_style_msg', '失败：' + e.message, true); }
     });
@@ -201,6 +203,7 @@ export function renderFirstTab(box) {
             state.firstText = text;
             $('ce_fm_out').value = text;
             saveProducts();
+            logTo('ce_fm_log', '✅ 所有任务已完成', 'g');
             flash('ce_fm_msg', '完成');
         } catch (e) { flash('ce_fm_msg', '失败：' + e.message, true); }
     });
@@ -253,6 +256,7 @@ export function renderCheckTab(box) {
                 },
             });
             $('ce_check_out').value = text;
+            logTo('ce_check_log', '✅ 所有任务已完成', 'g');
             flash('ce_check_msg', '完成');
         } catch (e) { flash('ce_check_msg', '失败：' + e.message, true); }
     });

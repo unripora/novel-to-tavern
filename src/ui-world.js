@@ -325,6 +325,8 @@ async function runChapterWorldbook() {
         saveProducts();
         showWbMode('multi');
         await renderVolList(allNodes);
+        if (signal.aborted) logTo('ce_wb_log', '⏹ 已停止（已完成卷均已落盘）', 'e');
+        else logTo('ce_wb_log', '✅ 所有任务已完成', 'g');
         flash('ce_wb_msg', signal.aborted ? '已停止（已完成卷均已落盘）' : `完成：本次生成 ${runNodes.length} 卷${wantGenWhole ? ' + 总本' : ''}${skipped ? `，跳过 ${skipped} 项` : ''}`);
     } catch (e) {
         flash('ce_wb_msg', '生成失败：' + e.message, true);
@@ -572,7 +574,13 @@ async function runWorldbook() {
             $('ce_wb_out').value = state.wbPreview;
             saveProducts();
         }
-        flash('ce_wb_msg', state.controller.signal.aborted ? '已停止' : `完成，共 ${state.wbEntries.length} 条`);
+        if (state.controller.signal.aborted) {
+            logTo('ce_wb_log', '⏹ 已停止', 'e');
+            flash('ce_wb_msg', '已停止');
+        } else {
+            logTo('ce_wb_log', '✅ 所有任务已完成', 'g');
+            flash('ce_wb_msg', `完成，共 ${state.wbEntries.length} 条`);
+        }
     } catch (e) {
         flash('ce_wb_msg', '失败：' + e.message, true);
     } finally {

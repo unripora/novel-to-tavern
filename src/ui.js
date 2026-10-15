@@ -2,7 +2,7 @@
  * ui.js —— 插件主操作面板主控
  *
  * 挂载到 settings.html 的 #ce_content 容器，按 Tab 分发渲染。
- * 各 Tab 的具体实现拆分在 ui-novel / ui-chars / ui-card / ui-misc。
+ * 各 Tab 的具体实现拆分在 ui-novel / ui-card / ui-misc。
  */
 
 import { settings, persist } from './store.js';
@@ -10,7 +10,6 @@ import { BUILTINS } from './prompts.js';
 import { setLogCacheHooks } from './util.js';
 import { state, $, setRerender, setStopRun, restoreProducts, mountLogs, cacheLog, clearCachedLog } from './ui-context.js';
 import { renderNovelTab } from './ui-novel.js';
-import { renderCharsTab } from './ui-chars.js';
 import { renderCardTab } from './ui-card.js';
 import { renderTimelineTab } from './ui-timeline.js';
 import { renderWorldTab } from './ui-world.js';
@@ -23,7 +22,6 @@ import {
 const TABS = {
     novel: renderNovelTab,
     timeline: renderTimelineTab,
-    chars: renderCharsTab,
     card: renderCardTab,
     persona: renderPersonaTab,
     world: renderWorldTab,

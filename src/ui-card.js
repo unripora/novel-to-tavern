@@ -10,15 +10,26 @@ import * as writer from './card-writer.js';
 import { generate } from './generate.js';
 import { DEFAULT_TPL, buildStatPanelBlock, buildStageHeader } from './prompts.js';
 import * as timeline from './timeline.js';
-import { openCardPreview as openCardPreviewPanel } from './ui-card-preview.js';
 import { $, state, escapeHtml, stopRun, saveProducts } from './ui-context.js';
-import * as stBridge from './st-bridge.js';
 
 export function renderCardTab(box) {
     const tpls = state.templates.map((t, i) =>
         `<option value="${i}" ${i === state.curTpl ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('');
     box.innerHTML = `
         <div class="ce-pane">
+            <div class="ce-section">
+                <label class="ce-label">角色（点击圆角矩形选择，用于生成；可多选）</label>
+                <div class="ce-rowline">
+                    <input type="text" id="ce_manual" class="text_pole" style="flex:1" placeholder="手动添加角色，多个用逗号/空格分隔">
+                    <button type="button" class="menu_button" id="ce_add_names">添加</button>
+                    <button type="button" class="menu_button" id="ce_scan">扫描全书</button>
+                    <button type="button" class="menu_button" id="ce_merge">合并所选</button>
+                    <button type="button" class="menu_button" id="ce_clear_chars">清空列表</button>
+                    <span id="ce_scan_msg" class="ce-msg"></span>
+                </div>
+                <div class="ce-log" id="ce_scan_log"></div>
+                <div class="ce-charlist" id="ce_charlist"></div>
+            </div>
             <div class="ce-section">
                 <label class="ce-label">角色卡模板</label>
                 <div class="ce-rowline">
@@ -37,7 +48,7 @@ export function renderCardTab(box) {
             <div class="ce-section">
                 <label class="ce-label">生成设置</label>
                 <div class="ce-rowline">
-                    <label>已选角色：<span id="ce_sel_names">${escapeHtml(state.selectedNames.join('、') || '（无，去「角色」页选择）')}</span></label>
+                    <label>已选角色：<span id="ce_sel_names">${escapeHtml(state.selectedNames.join('、') || '（无，请在上方角色区点击选择）')}</span></label>
                 </div>
                 <div class="ce-rowline">
                     <label>详细程度</label>
@@ -86,154 +97,331 @@ export function renderCardTab(box) {
                 <label class="ce-label">生成结果</label>
                 <div class="ce-log" id="ce_gen_log"></div>
                 <div class="ce-rowline">
-                    <button type="button" class="menu_button" id="ce_pv_all">全部导入酒馆</button>
-                    <button type="button" class="menu_button" id="ce_export_all">导出全部 .json</button>
-                    <button type="button" class="menu_button" id="ce_cards_clear">清空结果</button>
+                    <button type="button" class="menu_button" id="ce_import_sel">导入酒馆（选中）</button>
+                    <button type="button" class="menu_button" id="ce_export_sel">导出 .json（选中）</button>
                     <span id="ce_cards_msg" class="ce-msg"></span>
                 </div>
                 <div id="ce_card_list" class="ce-cardlist"></div>
-                <textarea id="ce_output" class="text_pole" rows="8" placeholder="生成的角色卡会显示在这里（合并视图，可编辑）…"></textarea>
-                <div class="ce-rowline">
-                    <button type="button" class="menu_button" id="ce_preview">预览 / 导入酒馆</button>
-                    <button type="button" class="menu_button" id="ce_export">导出 .json</button>
-                    <button type="button" class="menu_button" id="ce_cont">继续续写</button>
-                    <span id="ce_out_msg" class="ce-msg"></span>
+                <div id="ce_card_edit_box" style="display:none">
+                    <label class="ce-label">卡片预览 / 编辑（点上方圆角矩形切换）</label>
+                    <div class="ce-rowline">
+                        <input type="text" id="ce_card_name" class="text_pole" style="flex:1" placeholder="角色卡名字">
+                    </div>
+                    <textarea id="ce_card_text" class="text_pole" rows="12" placeholder="该角色的角色卡内容，可直接编辑…"></textarea>
+                    <div class="ce-rowline">
+                        <button type="button" class="menu_button" id="ce_card_cont">继续续写</button>
+                        <span id="ce_card_msg" class="ce-msg"></span>
+                    </div>
                 </div>
-                <div class="ce-preview" id="ce_card_preview" style="display:none"></div>
             </div>
         </div>`;
 
     bindTemplateUI();
     bindStatPanelUI();
     bindTimelineUI();
-    $('ce_output').value = state.cardText;
-    $('ce_output').addEventListener('input', (e) => { state.cardText = e.target.value; saveProducts(); });
+    bindCharsArea();
 
     $('ce_gen').addEventListener('click', runGenerate);
     $('ce_stop').addEventListener('click', stopRun);
-    $('ce_preview').addEventListener('click', () => {
-        // 单张预览：优先预览列表中最后一张（最近生成），无列表则用合并文本
-        const n = (state.cardGroups || []).length;
-        openCardPreview(n ? n - 1 : undefined);
+    $('ce_import_sel').addEventListener('click', importSelectedCards);
+    $('ce_export_sel').addEventListener('click', exportSelectedCards);
+
+    // 卡片预览/编辑框绑定
+    $('ce_card_name').addEventListener('input', (e) => {
+        const i = state.cardViewIdx;
+        if (i != null && state.cardGroups[i]) { state.cardGroups[i].name = e.target.value; saveProducts(); renderCardList(); }
     });
-    $('ce_export').addEventListener('click', () => {
-        const card = writer.parseCard(state.cardText, { name: state.selectedNames[0] });
-        writer.exportCardJson(card);
-        flash('ce_out_msg', '已导出 .json');
+    $('ce_card_text').addEventListener('input', (e) => {
+        const i = state.cardViewIdx;
+        if (i != null && state.cardGroups[i]) { state.cardGroups[i].text = e.target.value; state.cardText = groupsText(); saveProducts(); }
     });
-    $('ce_cont').addEventListener('click', continueGenerate);
-    $('ce_pv_all').addEventListener('click', importAllCards);
-    $('ce_export_all').addEventListener('click', exportAllCards);
-    $('ce_cards_clear').addEventListener('click', clearCards);
+    $('ce_card_cont').addEventListener('click', continueCard);
+
     renderCardList();
 }
 
-/** 渲染角色卡分组列表：每张卡可编辑 / 导入 / 导出 */
+/* ==================== 角色选择区（原「角色」Tab 融合） ==================== */
+
+function bindCharsArea() {
+    if (!$('ce_charlist')) return;
+    renderCharChips();
+
+    $('ce_add_names').addEventListener('click', () => {
+        const raw = $('ce_manual').value.trim();
+        if (!raw) return;
+        const names = raw.split(/[,，、\s]+/).map((s) => s.trim()).filter(Boolean);
+        const list = scan.getCharacters();
+        let added = 0;
+        for (const nm of names) {
+            if (list.some((c) => c.name === nm)) continue;
+            list.push({ name: nm, role: '（手动添加）', count: 0, aliases: [] });
+            if (!state.selectedNames.includes(nm)) state.selectedNames.push(nm);
+            added++;
+        }
+        scan.setCharacters(list);
+        $('ce_manual').value = '';
+        renderCharChips();
+        flash('ce_scan_msg', added ? '已添加 ' + added + ' 个' : '没有新增');
+    });
+
+    $('ce_clear_chars').addEventListener('click', () => {
+        scan.clearCharacters();
+        state.selectedNames = [];
+        renderCharChips();
+    });
+
+    $('ce_merge').addEventListener('click', () => {
+        if (state.selectedNames.length < 2) { flash('ce_scan_msg', '请至少选两个角色', true); return; }
+        const names = [...state.selectedNames];
+        const main = names[0];
+        const list = scan.getCharacters();
+        const target = list.find((c) => c.name === main);
+        if (!target) return;
+        const others = names.slice(1);
+        const aliasMeta = {};
+        others.forEach((n) => {
+            const o = list.find((c) => c.name === n);
+            if (o) {
+                target.aliases = (target.aliases || []).concat(o.aliases || [], [n]);
+                target.count = (target.count || 0) + (o.count || 0);
+                aliasMeta[n] = o.count || 0;
+            }
+        });
+        target.aliases = [...new Set(target.aliases.filter((x) => x !== main))];
+        target.aliasMeta = aliasMeta;
+        scan.setCharacters(list.filter((c) => !others.includes(c.name)));
+        state.selectedNames = [main];
+        renderCharChips();
+        flash('ce_scan_msg', '已合并为「' + main + '」');
+    });
+
+    $('ce_scan').addEventListener('click', runScan);
+}
+
+/** 渲染角色圆角矩形（选中/未选中），选中即用于生成 */
+function renderCharChips() {
+    const box = $('ce_charlist');
+    settings().selectedNames = state.selectedNames;
+    persist();
+    if (!box) return;
+    const chars = scan.getCharacters();
+    box.innerHTML = '';
+    if (!chars.length) {
+        box.innerHTML = '<div class="ce-tip">还没有角色。可手动添加，或点「扫描全书」。</div>';
+        return;
+    }
+    chars.forEach((c) => {
+        const on = state.selectedNames.includes(c.name);
+        const d = document.createElement('div');
+        d.className = 'ce-chip' + (on ? ' sel' : '');
+        const alias = (c.aliases && c.aliases.length) ? ' · 别名: ' + c.aliases.join('、') : '';
+        const src = c.count > 0 ? ('出现于 ' + c.count + ' 段') : '手动添加';
+        d.innerHTML = `<div class="ce-chip-n">${escapeHtml(c.name)}</div>
+            <div class="ce-chip-r">${escapeHtml(c.role || '')}</div>
+            <div class="ce-chip-c">${escapeHtml(src + alias)}</div>`;
+        d.addEventListener('click', () => {
+            const i = state.selectedNames.indexOf(c.name);
+            if (i >= 0) state.selectedNames.splice(i, 1);
+            else state.selectedNames.push(c.name);
+            renderCharChips();
+        });
+        box.appendChild(d);
+    });
+}
+
+async function runScan() {
+    const text = novel.getNovel().trim();
+    if (!text) { flash('ce_scan_msg', '请先导入小说', true); return; }
+    if (state.running) { stopRun(); return; }
+
+    const s = settings();
+    const chunk = Math.max(10000, Number(s.chunkSize) || 40000);
+    const cap = Math.max(1, Number(s.scanCap) || 40);
+    const chunks = [];
+    for (let i = 0; i < text.length && chunks.length < cap; i += chunk) {
+        chunks.push(text.slice(i, i + chunk));
+    }
+
+    state.running = true;
+    state.controller = new AbortController();
+    const signal = state.controller.signal;
+    clearLog('ce_scan_log');
+
+    const found = new Map();
+    try {
+        for (let i = 0; i < chunks.length; i++) {
+            if (signal.aborted) break;
+            flash('ce_scan_msg', `扫描 ${i + 1}/${chunks.length}…`, false, { persist: true });
+            const prompt = buildScanPrompt(chunks[i]);
+            let raw = '';
+            try {
+                raw = await generate(prompt, { signal, useStream: false, maxCont: settings().autoCont ? 3 : 0, logEl: 'ce_scan_log', label: `扫描第${i + 1}段` });
+            } catch (e) {
+                if (signal.aborted) break;
+                logTo('ce_scan_log', `第 ${i + 1} 段失败：${e.message}`, 'e');
+                continue;
+            }
+            const arr = extractNames(raw);
+            arr.forEach((item) => {
+                const nm = typeof item === 'string' ? item : item.name;
+                if (!nm) return;
+                const prev = found.get(nm) || { name: nm, role: '', count: 0, aliases: [] };
+                prev.count += 1;
+                if (item && item.role && !prev.role) prev.role = item.role;
+                found.set(nm, prev);
+            });
+            logTo('ce_scan_log', `第 ${i + 1} 段：累计 ${found.size} 个角色`, 'g');
+        }
+    } finally {
+        state.running = false;
+    }
+
+    const list = scan.getCharacters();
+    found.forEach((v, k) => {
+        if (!list.some((c) => c.name === k)) list.push(v);
+    });
+    scan.setCharacters(list);
+    renderCharChips();
+    logTo('ce_scan_log', signal.aborted ? '⏹ 已停止' : '✅ 所有任务已完成', 'g');
+    flash('ce_scan_msg', signal.aborted ? '已停止' : `扫描完成，共 ${list.length} 个角色`);
+}
+
+function buildScanPrompt(chunk) {
+    const sys = settings().sysPrefix ? settings().sysPrefix + '\n\n' : '';
+    return sys + '请从下面的小说片段中提取出现的**人物角色**。\n'
+        + '只输出 JSON 数组，每个元素形如 {"name":"角色名","role":"一句话身份说明"}。\n'
+        + '只写确实出现的角色，不要编造，不要输出解释或代码块。\n\n=== 片段 ===\n' + chunk;
+}
+
+function extractNames(raw) {
+    const t = stripThink(stripFence(raw));
+    const start = t.indexOf('[');
+    const end = t.lastIndexOf(']');
+    if (start < 0 || end < 0) return [];
+    try {
+        const arr = JSON.parse(t.slice(start, end + 1));
+        return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+/* ==================== 结果列表（圆角矩形 + 预览编辑） ==================== */
+
+/** 合并视图文本 */
+function groupsText() {
+    return (state.cardGroups || []).map((c) => c.text).join('\n\n\n');
+}
+
+/** 渲染结果圆角矩形：选中/未选中，选择状态存于 c.picked */
 function renderCardList() {
     const box = $('ce_card_list');
     if (!box) return;
     const list = state.cardGroups || [];
-    if (!list.length) { box.innerHTML = '<span class="ce-faint">（暂无卡片，先点「生成角色卡」）</span>'; return; }
-    box.innerHTML = list.map((c, i) => `
-        <div class="ce-cardgroup" data-idx="${i}">
-            <div class="ce-cardgroup-head">
-                <input type="text" class="text_pole ce_card_title" style="flex:1" value="${escapeHtml(c.name || '')}" data-idx="${i}" placeholder="角色卡名字">
-                <button type="button" class="menu_button ce_card_edit" data-idx="${i}">编辑</button>
-                <button type="button" class="menu_button ce_card_import" data-idx="${i}">导入酒馆</button>
-                <button type="button" class="menu_button ce_card_export" data-idx="${i}">导出</button>
-                <button type="button" class="menu_button ce_card_del" data-idx="${i}">删除</button>
-            </div>
-        </div>`).join('');
-
-    box.querySelectorAll('.ce_card_title').forEach((inp) => {
-        inp.addEventListener('input', (e) => {
-            const i = Number(e.target.dataset.idx);
-            if (state.cardGroups[i]) { state.cardGroups[i].name = e.target.value; saveProducts(); }
+    if (!list.length) {
+        box.innerHTML = '<span class="ce-faint">（暂无卡片，先点「生成角色卡」）</span>';
+        renderCardView();
+        return;
+    }
+    box.innerHTML = list.map((c, i) => {
+        const on = !!c.picked;
+        const viewing = state.cardViewIdx === i;
+        return `<div class="ce-chip card${on ? ' sel' : ''}${viewing ? ' view' : ''}" data-idx="${i}">
+            <div class="ce-chip-n">${escapeHtml(c.name || '未命名')}</div>
+            <div class="ce-chip-c">${on ? '已选中' : '未选中'}</div>
+        </div>`;
+    }).join('');
+    box.querySelectorAll('.ce-chip.card').forEach((el) => {
+        el.addEventListener('click', (e) => {
+            const i = Number(el.dataset.idx);
+            if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                // 修饰键：只切换选中，不切预览
+                if (state.cardGroups[i]) state.cardGroups[i].picked = !state.cardGroups[i].picked;
+            } else {
+                // 普通点击：切换「预览目标」；同时默认把它设为选中
+                state.cardViewIdx = (state.cardViewIdx === i) ? null : i;
+                if (state.cardViewIdx === i && state.cardGroups[i]) state.cardGroups[i].picked = true;
+            }
+            saveProducts(); renderCardList();
+        });
+        el.addEventListener('dblclick', (e) => {
+            // 双击：切换选中态
+            e.preventDefault();
+            const i = Number(el.dataset.idx);
+            if (state.cardGroups[i]) state.cardGroups[i].picked = !state.cardGroups[i].picked;
+            saveProducts(); renderCardList();
         });
     });
-    box.querySelectorAll('.ce_card_edit').forEach((b) => b.addEventListener('click', () => editCardPopup(Number(b.dataset.idx))));
-    box.querySelectorAll('.ce_card_import').forEach((b) => b.addEventListener('click', () => importOneCard(Number(b.dataset.idx))));
-    box.querySelectorAll('.ce_card_export').forEach((b) => b.addEventListener('click', () => exportOneCard(Number(b.dataset.idx))));
-    box.querySelectorAll('.ce_card_del').forEach((b) => b.addEventListener('click', () => {
-        const i = Number(b.dataset.idx);
-        state.cardGroups.splice(i, 1);
-        state.cardText = state.cardGroups.map((c) => c.text).join('\n\n\n');
-        $('ce_output').value = state.cardText;
-        saveProducts(); renderCardList();
-    }));
+    renderCardView();
 }
 
-/** 弹窗编辑单张角色卡（完整文本） */
-async function editCardPopup(idx) {
-    const c = state.cardGroups[idx];
-    if (!c) return;
-    const ok = await stBridge.popupForm({
-        title: '编辑角色卡：' + (c.name || ''),
-        bodyHtml: '<textarea id="ce_ed_card" class="text_pole" rows="16" style="width:100%">' + escapeHtml(c.text || '') + '</textarea>',
-        onOpen: (root) => { const t = root.querySelector('#ce_ed_card'); if (t) t.focus(); },
-    });
-    if (!ok) return;
-    const el = document.getElementById('ce_ed_card');
-    const text = el ? el.value : c.text;
-    c.text = text;
-    // 名字以标题框为准；若为空则尝试从文本解析
-    if (!c.name) c.name = writer.parseCard(text, {}).name || c.name;
-    state.cardText = state.cardGroups.map((x) => x.text).join('\n\n\n');
-    $('ce_output').value = state.cardText;
-    saveProducts(); renderCardList();
-    flash('ce_cards_msg', '已更新卡片');
+/** 渲染下方预览编辑框：只显示 state.cardViewIdx 指向的一张 */
+function renderCardView() {
+    const wrap = $('ce_card_edit_box');
+    if (!wrap) return;
+    const i = state.cardViewIdx;
+    const c = (i != null && state.cardGroups[i]) ? state.cardGroups[i] : null;
+    if (!c) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+    $('ce_card_name').value = c.name || '';
+    $('ce_card_text').value = c.text || '';
 }
 
-/** 导入单张卡 */
-async function importOneCard(idx) {
-    const c = state.cardGroups[idx];
-    if (!c) return;
-    const card = writer.parseCard(c.text, { name: c.name });
-    flash('ce_cards_msg', '导入中…', false, { persist: true });
-    const res = await writer.writeCharacterToTavern(card, {
-        onLog: (m, e) => logTo('ce_gen_log', '[导入] ' + m, e ? 'e' : ''),
-    });
-    flash('ce_cards_msg', res.message, !res.ok);
-    if (res.ok) toast('已导入：' + card.name);
+/** 当前选中的卡片下标列表 */
+function pickedIdxs() {
+    return (state.cardGroups || []).map((c, i) => (c.picked ? i : -1)).filter((i) => i >= 0);
 }
 
-/** 全部导入 */
-async function importAllCards() {
-    const list = state.cardGroups || [];
-    if (!list.length) { flash('ce_cards_msg', '没有卡片可导入', true); return; }
-    flash('ce_cards_msg', '全部导入中…', false, { persist: true });
+/** 导入酒馆（选中的卡；无选中则提示） */
+async function importSelectedCards() {
+    const idxs = pickedIdxs();
+    if (!idxs.length) { flash('ce_cards_msg', '请先点击圆角矩形选中要导入的角色卡', true); return; }
+    flash('ce_cards_msg', `导入 ${idxs.length} 张中…`, false, { persist: true });
     let okN = 0;
-    for (let i = 0; i < list.length; i++) {
-        const card = writer.parseCard(list[i].text, { name: list[i].name });
+    for (const i of idxs) {
+        const c = state.cardGroups[i];
+        const card = writer.parseCard(c.text, { name: c.name });
         const res = await writer.writeCharacterToTavern(card, {
             onLog: (m, e) => logTo('ce_gen_log', '[导入] ' + m, e ? 'e' : ''),
         });
         if (res.ok) okN++;
     }
-    flash('ce_cards_msg', `导入完成：成功 ${okN}/${list.length}`);
+    logTo('ce_gen_log', '✅ 所有任务已完成', 'g');
+    flash('ce_cards_msg', `导入完成：成功 ${okN}/${idxs.length}` + (okN ? '' : ''));
 }
 
-/** 导出单张卡 */
-function exportOneCard(idx) {
-    const c = state.cardGroups[idx];
-    if (!c) return;
-    writer.exportCardJson(writer.parseCard(c.text, { name: c.name }));
+/** 导出 .json（选中的卡） */
+function exportSelectedCards() {
+    const idxs = pickedIdxs();
+    if (!idxs.length) { flash('ce_cards_msg', '请先点击圆角矩形选中要导出的角色卡', true); return; }
+    idxs.forEach((i) => {
+        const c = state.cardGroups[i];
+        writer.exportCardJson(writer.parseCard(c.text, { name: c.name }));
+    });
+    logTo('ce_gen_log', '✅ 所有任务已完成', 'g');
+    flash('ce_cards_msg', `已导出 ${idxs.length} 张 .json`);
 }
 
-/** 导出全部卡（逐张下载） */
-function exportAllCards() {
-    const list = state.cardGroups || [];
-    if (!list.length) { flash('ce_cards_msg', '没有卡片可导出', true); return; }
-    list.forEach((c) => writer.exportCardJson(writer.parseCard(c.text, { name: c.name })));
-    flash('ce_cards_msg', `已导出 ${list.length} 张 .json`);
-}
-
-/** 清空结果 */
-function clearCards() {
-    state.cardGroups = []; state.cardText = '';
-    $('ce_output').value = '';
-    saveProducts(); renderCardList();
-    flash('ce_cards_msg', '已清空');
+/** 对当前预览的卡片续写 */
+async function continueCard() {
+    const i = state.cardViewIdx;
+    const c = (i != null) ? state.cardGroups[i] : null;
+    if (!c) { flash('ce_card_msg', '请先选择一张卡', true); return; }
+    const cont = '\n\n（请从上面中断处直接继续，不要重复已写内容。）';
+    flash('ce_card_msg', '续写中…');
+    try {
+        const raw = await generate([{ role: 'user', content: c.text + cont }], {
+            useStream: !!settings().useStream, maxCont: 2,
+            onText: (t) => { $('ce_card_text').value = c.text + '\n' + t; },
+        });
+        c.text = c.text + '\n' + stripThink(stripFence(raw)).trim();
+        state.cardText = groupsText();
+        $('ce_card_text').value = c.text;
+        saveProducts();
+        flash('ce_card_msg', '✅ 所有任务已完成');
+    } catch (e) {
+        flash('ce_card_msg', '续写失败：' + e.message, true);
+    }
 }
 
 function bindStatPanelUI() {
@@ -378,11 +566,10 @@ async function runGenerate() {
     state.cardGroups = [];
     renderCardList();
 
-    /** 每完成一张：入列表 + 刷新合并视图 */
+    /** 每完成一张：入列表（默认选中） + 刷新 */
     const pushCard = (name, text) => {
-        state.cardGroups.push({ name, text });
-        state.cardText = state.cardGroups.map((c) => c.text).join('\n\n\n');
-        $('ce_output').value = state.cardText;
+        state.cardGroups.push({ name, text, picked: true });
+        state.cardText = groupsText();
         saveProducts();
         renderCardList();
     };
@@ -401,7 +588,6 @@ async function runGenerate() {
                     raw = await generate(prompt, {
                         signal, useStream: !!settings().useStream,
                         maxCont: settings().autoCont ? 5 : 0,
-                        onText: (t) => { $('ce_output').value = state.cardText + '\n\n\n' + t; },
                         logEl: 'ce_gen_log', label: nm,
                     });
                 } catch (e) {
@@ -467,7 +653,13 @@ async function runGenerate() {
         $('ce_gen').style.display = 'inline-block';
         $('ce_stop').style.display = 'none';
     }
-    flash('ce_gen_msg', signal.aborted ? '已停止' : `生成完成（${state.cardGroups.length} 张）`);
+    if (signal.aborted) {
+        logTo('ce_gen_log', '⏹ 已停止', 'e');
+        flash('ce_gen_msg', '已停止');
+    } else {
+        logTo('ce_gen_log', '✅ 所有任务已完成', 'g');
+        flash('ce_gen_msg', `生成完成（${state.cardGroups.length} 张）`);
+    }
     flash('ce_cards_msg', `共 ${state.cardGroups.length} 张卡`);
 
     if (state.cardText) {
@@ -554,24 +746,4 @@ function postProcessCard(text, fallback) {
     return text.replace(/^\s*char_name\s*:/, key + ':');
 }
 
-async function continueGenerate() {
-    if (!state.cardText) { flash('ce_out_msg', '还没有内容', true); return; }
-    flash('ce_out_msg', '续写中…');
-    const cont = '\n\n（请从上面中断处直接继续，不要重复已写内容。）';
-    try {
-        const raw = await generate([{ role: 'user', content: state.cardText + cont }], {
-            useStream: !!settings().useStream, maxCont: 2,
-            onText: (t) => { $('ce_output').value = state.cardText + '\n' + t; },
-        });
-        state.cardText = state.cardText + '\n' + stripThink(stripFence(raw)).trim();
-        $('ce_output').value = state.cardText;
-        saveProducts();
-        flash('ce_out_msg', '续写完成');
-    } catch (e) {
-        flash('ce_out_msg', '续写失败：' + e.message, true);
-    }
-}
-
-function openCardPreview() {
-    openCardPreviewPanel();
-}
+export default { renderCardTab };
