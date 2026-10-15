@@ -50,6 +50,25 @@ export function renderWorldTab(box) {
                     <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_plotlist"> 剧情大纲</label>
                 </div>
                 <p class="ce-faint" id="ce_wb_opt_tip"></p>
+                <div id="ce_wb_vol_area" style="display:none">
+                    <p class="ce-faint">
+                        总本 = 全局世界观 + 角色总表 + 剧情大纲（必定生成，可取消跳过）；
+                        各卷按上面勾选的任务生成：「提取条目」「剧情分段」限定在该卷正文范围内，
+                        其余（共享背景 / 配角群像 / 人物列表 / 剧情大纲）为全书范围。
+                        每卷完成即独立落盘为 <code>&lt;记录名&gt;/worldbook/&lt;卷名&gt;.json</code>，可单独导入酒馆。
+                        「已生成」以落盘文件是否存在为准。
+                    </p>
+                    <div class="ce-rowline">
+                        <button type="button" class="menu_button" id="ce_wb_sel_all">全选</button>
+                        <button type="button" class="menu_button" id="ce_wb_sel_none">全不选</button>
+                        <button type="button" class="menu_button" id="ce_wb_sel_undone">只选未生成</button>
+                        <span id="ce_wb_msg_vol" class="ce-msg"></span>
+                    </div>
+                    <div class="ce-rowline">
+                        <label class="checkbox_label"><input type="checkbox" id="ce_wb_force"> 强制重跑（覆盖已生成的卷）</label>
+                    </div>
+                    <div class="ce-vollist" id="ce_wb_vols"></div>
+                </div>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_wb_run">生成世界书</button>
                     <span id="ce_wb_msg" class="ce-msg"></span>
@@ -66,26 +85,6 @@ export function renderWorldTab(box) {
                     <button type="button" class="menu_button" id="ce_wb_clear">清空</button>
                     <span id="ce_wb_msg2" class="ce-msg"></span>
                 </div>
-            </div>
-            <div class="ce-section" id="ce_wb_vol_sec" style="display:none">
-                <label class="ce-label">按卷生成（来自时间线）</label>
-                <p class="ce-faint">
-                    总本 = 全局世界观 + 角色总表 + 剧情大纲（必定生成，可取消跳过）；
-                    各卷按上面勾选的任务生成：「提取条目」「剧情分段」限定在该卷正文范围内，
-                    其余（共享背景 / 配角群像 / 人物列表 / 剧情大纲）为全书范围。
-                    每卷完成即独立落盘为 <code>&lt;记录名&gt;/worldbook/&lt;卷名&gt;.json</code>，可单独导入酒馆。
-                    「已生成」以落盘文件是否存在为准。
-                </p>
-                <div class="ce-rowline">
-                    <button type="button" class="menu_button" id="ce_wb_sel_all">全选</button>
-                    <button type="button" class="menu_button" id="ce_wb_sel_none">全不选</button>
-                    <button type="button" class="menu_button" id="ce_wb_sel_undone">只选未生成</button>
-                    <span id="ce_wb_msg_vol" class="ce-msg"></span>
-                </div>
-                <div class="ce-rowline">
-                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_force"> 强制重跑（覆盖已生成的卷）</label>
-                </div>
-                <div class="ce-vollist" id="ce_wb_vols"></div>
             </div>
             <div class="ce-section" id="ce_wb_groups_sec" style="display:none">
                 <label class="ce-label">生成结果（总本 + 各卷）</label>
@@ -148,7 +147,7 @@ function bindWorldModeUI(nodes) {
     const hint = $('ce_wb_mode_hint');
     const tip = $('ce_wb_opt_tip');
     const writeSec = $('ce_wb_write_sec');
-    const volSec = $('ce_wb_vol_sec');
+    const volArea = $('ce_wb_vol_area');
     const groupsSec = $('ce_wb_groups_sec');
     if (!sel) return;
 
@@ -161,14 +160,14 @@ function bindWorldModeUI(nodes) {
             hint.textContent = nodes.length ? `（已建立 ${nodes.length} 个卷）` : '（尚未建立时间线，请去「时间线」页划分）';
             tip.textContent = '按卷生成：总本 = 全局世界观 + 角色总表 + 剧情大纲；各卷中「提取条目」「剧情分段」限定在该卷正文范围内，其余任务为全书范围。';
             writeSec.style.display = 'none';
-            volSec.style.display = 'block';
+            volArea.style.display = 'block';
             groupsSec.style.display = state.wbGroups ? 'block' : 'none';
             await renderVolList(nodes);
         } else {
             hint.textContent = '';
             tip.textContent = '整本生成：把所选任务在全书范围内执行一次，结果合并为一本世界书。';
             writeSec.style.display = 'block';
-            volSec.style.display = 'none';
+            volArea.style.display = 'none';
             groupsSec.style.display = state.wbGroups ? 'block' : 'none';
         }
     };
