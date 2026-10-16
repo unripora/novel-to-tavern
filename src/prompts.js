@@ -188,6 +188,54 @@ export const BLANK_TPL = `char_name:
 /** 默认模板 = 主模板 + NSFW */
 export const DEFAULT_TPL = TEMPLATE + NSFW_BLOCK;
 
+/**
+ * 多人卡（旁白制）整段 prompt 模板。
+ *
+ * 与单角色卡模板（字段结构）不同：多人卡模板是**整段提示词**，
+ * 通过占位符注入本次生成的信息，用户可整段编辑：
+ *   {characters} 角色列表（每行「· 名字」）
+ *   {cardName}   卡名
+ *   {detail}     篇幅要求行（由详细程度生成，可为空）
+ *   {nsfw}       NSFW 要求行
+ *   {text}       各角色相关的小说文本拼接
+ * 说明：正文里出现的半角花括号请写成 {names} 等具名占位；其余花括号会被保留。
+ */
+export const ENSEMBLE_TPL =
+    '你是严谨的角色卡抽取助手，负责把一部小说里的多个角色整合成**一张「多人卡」**。\n' +
+    '这张卡的核心人格是**旁白 / 主持人（GM）**：用第三人称做环境与场景描写、推进剧情、引导玩家游玩。\n' +
+    '工作原则：只依据原文，绝不臆造；严禁把某个角色的经历/设定安到别的角色头上；严禁 OOC。\n\n' +
+    '请把下面这些角色整合成**一张多人卡**，卡名为「{cardName}」。\n\n' +
+    '本卡的角色：\n{characters}\n\n' +
+    '【核心：旁白制】\n' +
+    '· 本卡的 {{char}} 是**旁白**，不是任何一个具体角色。旁白负责：环境/地点/动作描写、推动故事进展、引导玩家行动。\n' +
+    '· 旁白**不替玩家做决定**、**不冒充角色发言**；角色台词交给角色自己说。\n' +
+    '· 输出分为两层，泾渭分明：**旁白层**（叙述）与**对话层**（角色台词，明确标注是哪个角色说的）。\n\n' +
+    '【剧情推进与角色登场】\n' +
+    '· 开场**只有旁白**铺陈场景与引导，**不要点名任何角色**、不要让其现身。\n' +
+    '· 各角色的基本信息写进卡里（旁白心里知道），但**只有剧情推进到位时，旁白才安排该角色出场**，之后该角色才开口说话。\n' +
+    '· 严禁一开场就让所有角色同时登场；也严禁剧透尚未出场角色的后续信息。\n\n' +
+    '【填写要求】\n' +
+    '· description：世界观概括 + 旁白职责与约束 + 各角色精要（用「角色名：……」分条，覆盖身份/性格/与玩家关系，依据原文、简洁）。\n' +
+    '· personality：旁白的风格与准则（第三人称、简洁、推进剧情、不 OOC、不替玩家决定）。\n' +
+    '· scenario：开局场景（玩家此刻所处环境，不点名角色）。\n' +
+    '· first_mes：**旁白开场**——环境地点描写 + 引导玩家（示例口吻：「你身处……你可以……」），只出现旁白。\n' +
+    '· mes_example：**至少 2 组**「旁白叙述 + 角色台词」的分工示例，教 AI 如何分层（旁白用叙述句，角色台词标注角色名并用引号）。\n' +
+    '{detail}{nsfw}' +
+    '· 只依据原文，不编造；原文未提及的填「（原文未提及）」。\n\n' +
+    '【输出格式】严格输出**一个 JSON 对象**（不要代码块、不要解释），字段固定为：\n' +
+    '{\n' +
+    '  "name": "{cardName}",\n' +
+    '  "description": "……",\n' +
+    '  "personality": "……",\n' +
+    '  "scenario": "……",\n' +
+    '  "first_mes": "……",\n' +
+    '  "mes_example": "……"\n' +
+    '}\n\n' +
+    '=== 小说文本（与这些角色相关）===\n{text}';
+
+/** 多人卡模板的固定名（用于识别与弹窗判断） */
+export const ENSEMBLE_TPL_NAME = '多人卡（旁白制）';
+
 /** 内置模板列表 */
 export const BUILTINS = [
     { name: '默认模板', text: DEFAULT_TPL },
@@ -195,6 +243,7 @@ export const BUILTINS = [
     { name: '精简人设（无经历）', text: SLIM_TPL },
     { name: 'NPC 模板（配角简版）', text: NPC_TPL },
     { name: '空白模板（自定义）', text: BLANK_TPL },
+    { name: ENSEMBLE_TPL_NAME, text: ENSEMBLE_TPL },
 ];
 
 /** 世界书条目格式说明 */
@@ -261,5 +310,5 @@ export function buildStageHeader(nodeName, summary = '') {
 
 export default {
     TEMPLATE, NSFW_BLOCK, EVENT_TPL, SLIM_TPL, NPC_TPL, BLANK_TPL,
-    DEFAULT_TPL, BUILTINS, WB_FMT, buildStatPanelBlock, buildStageHeader,
+    DEFAULT_TPL, ENSEMBLE_TPL, ENSEMBLE_TPL_NAME, BUILTINS, WB_FMT, buildStatPanelBlock, buildStageHeader,
 };

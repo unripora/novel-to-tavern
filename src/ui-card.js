@@ -8,7 +8,7 @@ import * as scan from './scan.js';
 import * as extras from './extras.js';
 import * as writer from './card-writer.js';
 import { generate } from './generate.js';
-import { DEFAULT_TPL, buildStatPanelBlock, buildStageHeader } from './prompts.js';
+import { DEFAULT_TPL, ENSEMBLE_TPL, ENSEMBLE_TPL_NAME, buildStatPanelBlock, buildStageHeader } from './prompts.js';
 import * as timeline from './timeline.js';
 import { popupForm } from './st-bridge.js';
 import { $, state, escapeHtml, stopRun, saveProducts } from './ui-context.js';
@@ -696,6 +696,19 @@ async function runGenerateEnsemble() {
     if (cardName == null) return;            // 用户取消
     cardName = cardName.trim() || autoName;
 
+    // 模板选择：默认用「多人卡（旁白制）」模板；若当前选中的是别的模板，让用户选
+    const curTpl = state.templates[state.curTpl];
+    const ensembleTpl = state.templates.find((t) => t.name === ENSEMBLE_TPL_NAME);
+    let tmplText = (ensembleTpl && ensembleTpl.text) || ENSEMBLE_TPL;
+    if (!curTpl || curTpl.name !== ENSEMBLE_TPL_NAME) {
+        const pickEnsemble = await askEnsembleTemplate(curTpl ? curTpl.name : '（无）');
+        if (pickEnsemble == null) return;    // 取消
+        if (!pickEnsemble) {
+            // 用户选择「跑当前选定的模板」
+            tmplText = (curTpl && curTpl.text) || ENSEMBLE_TPL;
+        }
+    }
+
     state.running = true;
     state.controller = new AbortController();
     const signal = state.controller.signal;
@@ -716,7 +729,7 @@ async function runGenerateEnsemble() {
     let raw = '';
     try {
         flash('ce_gen_msg', '生成多人卡「' + cardName + '」…', false, { persist: true });
-        const prompt = buildEnsemblePrompt(names, cardName, cctx, { detail, nsfw });
+        const prompt = buildEnsemblePrompt(names, cardName, cctx, { detail, nsfw, tmpl: tmplText });
         raw = await generate(prompt, {
             signal, useStream: !!settings().useStream,
             maxCont: settings().autoCont ? 5 : 0,
@@ -777,62 +790,65 @@ async function askEnsembleName(autoName) {
 }
 
 /**
- * 多人卡提示词：旁白制。
+ * 弹窗：当前选中的不是多人卡模板时，让用户选择跑哪个模板。
+ * @param {string} curName 当前选中的模板名
+ * @returns {Promise<null|boolean>} null=取消；true=用多人卡模板；false=用当前选定模板
+ */
+async function askEnsembleTemplate(curName) {
+    const html =
+        '<p class="ce-faint" style="margin:0 0 8px">你当前选中的角色卡模板是「' + escapeHtml(curName) + '」，' +
+        '它不是多人卡专用模板。请选择本次多人卡要使用的模板：</p>' +
+        '<label class="checkbox_label" style="display:block;margin:6px 0">' +
+        '<input type="radio" name="ce_ens_tpl" value="ensemble" checked> ' +
+        '使用多人卡模板「' + escapeHtml(ENSEMBLE_TPL_NAME) + '」（推荐）</label>' +
+        '<label class="checkbox_label" style="display:block;margin:6px 0">' +
+        '<input type="radio" name="ce_ens_tpl" value="current"> ' +
+        '使用当前选定的模板「' + escapeHtml(curName) + '」</label>';
+    let radios = [];
+    const ok = await popupForm({
+        title: '多人卡 · 选择模板',
+        bodyHtml: html,
+        okLabel: '确定',
+        cancelLabel: '取消',
+        onOpen: (root) => { radios = [...root.querySelectorAll('input[name="ce_ens_tpl"]')]; },
+    });
+    if (!ok) return null;
+    const chosen = radios.find((r) => r.checked);
+    return !chosen || chosen.value === 'ensemble';
+}
+
+/**
+ * 多人卡提示词：渲染多人卡模板（整段 prompt）。
  * @param {string[]} names 所选角色名
  * @param {string} cardName 卡名（整张卡一个名字）
  * @param {string} cctx 各角色相关片段拼接
- * @param {{detail?:string, nsfw?:boolean}} opts
+ * @param {{detail?:string, nsfw?:boolean, tmpl?:string}} opts
  */
-function buildEnsemblePrompt(names, cardName, cctx, { detail, nsfw } = {}) {
-    const sys =
-        '你是严谨的角色卡抽取助手，负责把一部小说里的多个角色整合成**一张「多人卡」**。\n' +
-        '这张卡的核心人格是**旁白 / 主持人（GM）**：用第三人称做环境与场景描写、推进剧情、引导玩家游玩。\n' +
-        '工作原则：只依据原文，绝不臆造；严禁把某个角色的经历/设定安到别的角色头上；严禁 OOC。';
-    const withSys = settings().sysPrefix ? settings().sysPrefix + '\n\n' + sys : sys;
-
-    const nsfwRule = nsfw
-        ? '· 若原文涉及成人向内容，只依据原文，不编造。'
-        : '· 不要输出任何性相关内容。';
-    const detailRule = detail === 'concise'
-        ? '· 【篇幅：精简】各字段尽量简短，角色精要每人 2~4 句。'
-        : detail === 'rich'
-            ? '· 【篇幅：详尽】忠于原文的前提下尽量丰富具体。'
-            : '· 【篇幅：适中】各字段详略得当。';
+function buildEnsemblePrompt(names, cardName, cctx, { detail, nsfw, tmpl } = {}) {
+    const tpl = String(tmpl || ENSEMBLE_TPL);
 
     const list = names.map((n) => '· ' + n).join('\n');
+    const detailRule = detail === 'concise'
+        ? '· 【篇幅：精简】各字段尽量简短，角色精要每人 2~4 句。\n'
+        : detail === 'rich'
+            ? '· 【篇幅：详尽】忠于原文的前提下尽量丰富具体。\n'
+            : '· 【篇幅：适中】各字段详略得当。\n';
+    const nsfwRule = nsfw
+        ? '· 若原文涉及成人向内容，只依据原文，不编造。\n'
+        : '· 不要输出任何性相关内容。\n';
 
-    const user =
-        '请把下面这些角色整合成**一张多人卡**，卡名为「' + cardName + '」。\n\n' +
-        '本卡的角色：\n' + list + '\n\n' +
-        '【核心：旁白制】\n' +
-        '· 本卡的 {{char}} 是**旁白**，不是任何一个具体角色。旁白负责：环境/地点/动作描写、推动故事进展、引导玩家行动。\n' +
-        '· 旁白**不替玩家做决定**、**不冒充角色发言**；角色台词交给角色自己说。\n' +
-        '· 输出分为两层，泾渭分明：**旁白层**（叙述）与**对话层**（角色台词，明确标注是哪个角色说的）。\n\n' +
-        '【剧情推进与角色登场】\n' +
-        '· 开场**只有旁白**铺陈场景与引导，**不要点名任何角色**、不要让其现身。\n' +
-        '· 各角色的基本信息写进卡里（旁白心里知道），但**只有剧情推进到位时，旁白才安排该角色出场**，之后该角色才开口说话。\n' +
-        '· 严禁一开场就让所有角色同时登场；也严禁剧透尚未出场角色的后续信息。\n\n' +
-        '【填写要求】\n' +
-        '· description：世界观概括 + 旁白职责与约束 + 各角色精要（用「角色名：……」分条，覆盖身份/性格/与玩家关系，依据原文、简洁）。\n' +
-        '· personality：旁白的风格与准则（第三人称、简洁、推进剧情、不 OOC、不替玩家决定）。\n' +
-        '· scenario：开局场景（玩家此刻所处环境，不点名角色）。\n' +
-        '· first_mes：**旁白开场**——环境地点描写 + 引导玩家（示例口吻：「你身处……你可以……」），只出现旁白。\n' +
-        '· mes_example：**至少 2 组**「旁白叙述 + 角色台词」的分工示例，教 AI 如何分层（旁白用叙述句，角色台词标注角色名并用引号）。\n' +
-        (detailRule ? detailRule + '\n' : '') +
-        nsfwRule + '\n' +
-        '· 只依据原文，不编造；原文未提及的填「（原文未提及）」。\n\n' +
-        '【输出格式】严格输出**一个 JSON 对象**（不要代码块、不要解释），字段固定为：\n' +
-        '{\n' +
-        '  "name": "' + cardName + '",\n' +
-        '  "description": "……",\n' +
-        '  "personality": "……",\n' +
-        '  "scenario": "……",\n' +
-        '  "first_mes": "……",\n' +
-        '  "mes_example": "……"\n' +
-        '}\n\n' +
-        '=== 小说文本（与这些角色相关）===\n' + cctx;
+    // 只替换具名占位符，保留 {{char}} 等其它花括号写法
+    const body = tpl
+        .replace(/\{characters\}/g, list)
+        .replace(/\{cardName\}/g, cardName)
+        .replace(/\{detail\}/g, detailRule)
+        .replace(/\{nsfw\}/g, nsfwRule)
+        .replace(/\{text\}/g, cctx);
 
-    return [{ role: 'system', content: withSys }, { role: 'user', content: user }];
+    // 系统提示：固定（旁白制的工作原则），模板只负责正文部分
+    const sys = '你是严谨的角色卡抽取助手，负责把多个角色整合成一张「多人卡」（核心人格为旁白/GM）。只依据原文，绝不臆造；严禁张冠李戴；严禁 OOC。';
+    const withSys = settings().sysPrefix ? settings().sysPrefix + '\n\n' + sys : sys;
+    return [{ role: 'system', content: withSys }, { role: 'user', content: body }];
 }
 
 function buildCardPrompt(nm, tmpl, cctx, { detail, nsfw, statPanel }) {

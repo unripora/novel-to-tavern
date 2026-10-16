@@ -6,7 +6,7 @@
  */
 
 import { settings, persist } from './store.js';
-import { BUILTINS } from './prompts.js';
+import { BUILTINS, ENSEMBLE_TPL, ENSEMBLE_TPL_NAME } from './prompts.js';
 import { setLogCacheHooks } from './util.js';
 import { state, $, setRerender, setStopRun, restoreProducts, mountLogs, cacheLog, clearCachedLog } from './ui-context.js';
 import { renderNovelTab } from './ui-novel.js';
@@ -50,7 +50,20 @@ function initTemplates() {
     state.templates = Array.isArray(s.templates) && s.templates.length
         ? s.templates
         : BUILTINS.map((t) => ({ ...t }));
-    if (!Array.isArray(s.templates) || !s.templates.length) {
+    // 补齐缺失的内置命名模板（老用户升级后也能看到「多人卡（旁白制）」等）
+    let added = false;
+    for (const b of BUILTINS) {
+        if (!state.templates.some((t) => t.name === b.name)) {
+            state.templates.push({ ...b });
+            added = true;
+        }
+    }
+    // 兜底：确保多人卡模板一定存在（即便 BUILTINS 被改动）
+    if (!state.templates.some((t) => t.name === ENSEMBLE_TPL_NAME)) {
+        state.templates.push({ name: ENSEMBLE_TPL_NAME, text: ENSEMBLE_TPL });
+        added = true;
+    }
+    if (!Array.isArray(s.templates) || !s.templates.length || added) {
         s.templates = state.templates;
         persist();
     }
