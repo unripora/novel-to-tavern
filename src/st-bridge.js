@@ -93,6 +93,8 @@ export async function aiRaw(prompt, opts = {}) {
 
     // 临时覆盖酒馆「响应长度」，绕过酒馆滑块限制（生成后自动还原）
     return withLengthOverride(opts.maxTokens, async () => {
+        // 消息数组 → 文本（供位置参数/最简对象回退用；部分酒馆版本不认位置参数传数组）
+        const asText = Array.isArray(prompt) ? messagesToText(prompt) : prompt;
         // —— 方案 A：对象形式（可带 max_tokens）——
         const objArgs = { prompt };
         if (opts.onDelta) objArgs.onDelta = opts.onDelta;
@@ -106,14 +108,14 @@ export async function aiRaw(prompt, opts = {}) {
             // 对象形式失败，继续尝试其它签名（不要把致命错误吞掉：最后会重抛）
             // —— 方案 B：位置参数形式（原生酒馆）——
             try {
-                const out = await c.generateRaw(prompt);
+                const out = await c.generateRaw(asText);
                 diag(opts, 'B 位置参数成功', '(无 max_tokens)', out);
                 return extractText(out);
             } catch (eB) {
                 diag(opts, 'B 位置参数失败', '', eB);
                 // —— 方案 C：回退到最简对象形式（不带 max_tokens / onDelta）——
                 try {
-                    const out = await c.generateRaw({ prompt });
+                    const out = await c.generateRaw({ prompt: asText });
                     diag(opts, 'C 最简对象成功', '(无 max_tokens)', out);
                     return extractText(out);
                 } catch (eC) {
@@ -124,6 +126,15 @@ export async function aiRaw(prompt, opts = {}) {
             }
         }
     });
+}
+
+/** 把 Chat 消息数组拼成纯文本（兼容位置参数/最简对象回退） */
+function messagesToText(messages) {
+    return (messages || []).map((m) => {
+        const role = m && m.role ? m.role : 'user';
+        const content = m && typeof m.content === 'string' ? m.content : '';
+        return '【' + role + '】\n' + content;
+    }).join('\n\n');
 }
 
 /** 诊断输出：写控制台 + 可选回调（面板日志区），不影响功能 */

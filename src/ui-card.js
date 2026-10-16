@@ -845,10 +845,12 @@ function buildEnsemblePrompt(names, cardName, cctx, { detail, nsfw, tmpl } = {})
         .replace(/\{nsfw\}/g, nsfwRule)
         .replace(/\{text\}/g, cctx);
 
-    // 系统提示：固定（旁白制的工作原则），模板只负责正文部分
+    // 输出**纯字符串** prompt（而非消息数组）：
+    // 消息数组仅在 generateRaw 的对象形式下有效，而部分环境对象形式会失败、
+    // 回退到位置参数时数组无法被酒馆正确解析（导致 AI 收不到内容）。字符串在三种回退下都稳。
     const sys = '你是严谨的角色卡抽取助手，负责把多个角色整合成一张「多人卡」（核心人格为旁白/GM）。只依据原文，绝不臆造；严禁张冠李戴；严禁 OOC。';
-    const withSys = settings().sysPrefix ? settings().sysPrefix + '\n\n' + sys : sys;
-    return [{ role: 'system', content: withSys }, { role: 'user', content: body }];
+    const sysPrefix = settings().sysPrefix ? settings().sysPrefix + '\n\n' + sys : sys;
+    return sysPrefix + '\n\n' + body;
 }
 
 function buildCardPrompt(nm, tmpl, cctx, { detail, nsfw, statPanel }) {
