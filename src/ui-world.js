@@ -38,6 +38,12 @@ export function renderWorldTab(box) {
                         <option value="group">群像合集</option>
                         <option value="each">每个配角单独一条</option>
                     </select>
+                    <label>关联人物</label>
+                    <select id="ce_wb_related" class="text_pole">
+                        <option value="none">不关联</option>
+                        <option value="light" selected>轻（默认，条目带 related）</option>
+                        <option value="heavy">重（另存关系图谱）</option>
+                    </select>
                 </div>
                 <div class="ce-rowline">
                     <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_extract" checked> 提取条目</label>
@@ -260,6 +266,7 @@ async function runChapterWorldbook() {
         plot: $('ce_wb_t_plot').checked,
         chars: $('ce_wb_t_chars').checked,
         plotlist: $('ce_wb_t_plotlist').checked,
+        relatedMode: $('ce_wb_related')?.value || 'light',
     };
     if (!Object.entries(options).some(([k, v]) => k !== 'minorMode' && v)) {
         flash('ce_wb_msg', '请先勾选要生成的内容', true); return;
@@ -534,10 +541,11 @@ async function runWorldbook() {
     }
 
     const novelName = novel.getCurrentRecord() || '未命名';
+    const relatedMode = $('ce_wb_related')?.value || 'light';
     const tasks = [];
     if ($('ce_wb_t_extract').checked) {
         tasks.push(['提取条目', () => runWithResume('extract', novelName, (st) => worldbook.wbExtractCore({
-            entries: state.wbEntries, state: st,
+            entries: state.wbEntries, state: st, relatedMode,
             onSegment: (s) => persistMod.saveProgress('extract', s, novelName),
         }))]);
     }
@@ -545,16 +553,17 @@ async function runWorldbook() {
     if ($('ce_wb_t_minor').checked) tasks.push(['配角群像', () => worldbook.wbMinorCore({ mode: $('ce_wb_minor_mode').value, cap: 20 })]);
     if ($('ce_wb_t_plot').checked) {
         tasks.push(['剧情分段', () => runWithResume('plot', novelName, (st) => worldbook.wbPlotCore({
-            entries: state.wbEntries, state: st,
+            entries: state.wbEntries, state: st, relatedMode,
             onSegment: (s) => persistMod.saveProgress('plot', s, novelName),
         }))]);
     }
     if ($('ce_wb_t_chars').checked) tasks.push(['人物列表', () => worldbook.wbConstantEntry({ kind: 'chars' })]);
     if ($('ce_wb_t_plotlist').checked) tasks.push(['剧情大纲', () => worldbook.wbConstantEntry({ kind: 'plot' })]);
+    if (relatedMode === 'heavy') tasks.push(['关系图谱', () => runRelationExtract(novelName)]);
     if (!tasks.length) { flash('ce_wb_msg', '请先勾选要生成的内容', true); return; }
 
     // 记录本次生成选项到工作区（中间状态）
-    persistMod.saveOpts(novelName, { mode: 'whole', options: { nsfw: settings().nsfw } }).catch(() => { });
+    persistMod.saveOpts(novelName, { mode: 'whole', options: { nsfw: settings().nsfw, relatedMode } }).catch(() => { });
 
     state.running = true;
     state.controller = new AbortController();
@@ -605,6 +614,18 @@ async function runWithResume(kind, rec, run) {
         await persistMod.saveProgress(kind, res.state, rec);
     }
     return res;
+}
+
+/** 重档：关系抽取并落盘到工作区 _state/relations.json */
+async function runRelationExtract(rec) {
+    const graph = await worldbook.relExtractCore({ signal: state.controller ? state.controller.signal : undefined });
+    try {
+        await persistMod.saveRelations(rec, graph);
+        flash('ce_wb_msg', '关系图谱已落盘（实体 ' + graph.entities.length + '、关系 ' + graph.relations.length + '）');
+    } catch (e) {
+        logTo('ce_wb_log', '关系图谱落盘失败：' + e.message, 'e');
+    }
+    return graph;
 }
 
 /** 归一化世界书生成结果 */

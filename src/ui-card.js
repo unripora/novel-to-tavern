@@ -10,6 +10,7 @@ import * as writer from './card-writer.js';
 import { generate } from './generate.js';
 import { DEFAULT_TPL, buildStatPanelBlock, buildStageHeader } from './prompts.js';
 import * as timeline from './timeline.js';
+import { popupForm } from './st-bridge.js';
 import { $, state, escapeHtml, stopRun, saveProducts } from './ui-context.js';
 
 export function renderCardTab(box) {
@@ -89,9 +90,13 @@ export function renderCardTab(box) {
                 </div>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_gen">生成角色卡</button>
+                    <button type="button" class="menu_button" id="ce_gen_ensemble">生成多人卡</button>
                     <button type="button" class="menu_button" id="ce_stop" style="display:none">停止</button>
                     <span id="ce_gen_msg" class="ce-msg"></span>
                 </div>
+                <p class="ce-faint" style="margin:4px 0 0">
+                    多人卡：把所选的多个角色合成**一张**卡（旁白主导、角色随剧情登场），整张卡只用一个卡名。
+                </p>
             </div>
             <div class="ce-section">
                 <label class="ce-label">生成结果</label>
@@ -122,6 +127,7 @@ export function renderCardTab(box) {
     bindCharsArea();
 
     $('ce_gen').addEventListener('click', runGenerate);
+    $('ce_gen_ensemble').addEventListener('click', runGenerateEnsemble);
     $('ce_stop').addEventListener('click', stopRun);
     $('ce_import_sel').addEventListener('click', importSelectedCards);
     $('ce_export_sel').addEventListener('click', exportSelectedCards);
@@ -670,6 +676,163 @@ async function runGenerate() {
             text: state.cardText,
         });
     }
+}
+
+/* ==================== 多人卡（旁白制，一张卡） ==================== */
+
+/**
+ * 多人卡：把所选的多个角色合成一张卡。
+ * 卡人格 = 纯旁白（叙述/推进/引导，不替玩家决定、不冒充角色）；
+ * 输出直接为 Character Card V2 字段的 JSON，便于 parseCard 解析。
+ */
+async function runGenerateEnsemble() {
+    if (!state.selectedNames.length) { flash('ce_gen_msg', '请先选择角色（至少 1 个）', true); return; }
+    if (state.running) { stopRun(); return; }
+
+    const names = state.selectedNames.slice();
+    // 卡名：弹框让用户填一个（留空自动拼）
+    const autoName = names.join('、');
+    let cardName = await askEnsembleName(autoName);
+    if (cardName == null) return;            // 用户取消
+    cardName = cardName.trim() || autoName;
+
+    state.running = true;
+    state.controller = new AbortController();
+    const signal = state.controller.signal;
+    $('ce_gen').style.display = 'inline-block';
+    $('ce_gen_ensemble').style.display = 'none';
+    $('ce_stop').style.display = 'inline-block';
+    clearLog('ce_gen_log');
+
+    const detail = $('ce_detail').value;
+    const nsfw = $('ce_nsfw').checked;
+    const fullCtx = $('ce_full_ctx').checked;
+
+    // cctx：各角色各自相关段落，拼接（过长由 collectContext 内部按上限裁剪）
+    const cctx = names
+        .map((nm) => scan.collectContext(nm, [], fullCtx))
+        .join('\n\n========== 以上为一位角色的相关片段，以下为另一位 ==========\n\n');
+
+    let raw = '';
+    try {
+        flash('ce_gen_msg', '生成多人卡「' + cardName + '」…', false, { persist: true });
+        const prompt = buildEnsemblePrompt(names, cardName, cctx, { detail, nsfw });
+        raw = await generate(prompt, {
+            signal, useStream: !!settings().useStream,
+            maxCont: settings().autoCont ? 5 : 0,
+            logEl: 'ce_gen_log', label: '多人卡·' + cardName,
+        });
+    } catch (e) {
+        if (!signal.aborted) logTo('ce_gen_log', '多人卡失败：' + e.message, 'e');
+    } finally {
+        state.running = false;
+        $('ce_gen').style.display = 'inline-block';
+        $('ce_gen_ensemble').style.display = 'inline-block';
+        $('ce_stop').style.display = 'none';
+    }
+
+    if (signal.aborted) { logTo('ce_gen_log', '⏹ 已停止', 'e'); flash('ce_gen_msg', '已停止'); return; }
+    const text = stripThink(stripFence(raw)).trim();
+    if (!text) { logTo('ce_gen_log', '多人卡：未生成内容', 'e'); flash('ce_gen_msg', '未生成内容', true); return; }
+
+    // 作为一张新卡**追加**进列表（不清空已有的单角色卡，复用列表/预览/导入逻辑）
+    state.cardGroups = state.cardGroups || [];
+    state.cardGroups.push({ name: cardName, text, picked: true });
+    state.cardText = groupsText();
+    state.cardViewIdx = state.cardGroups.length - 1;
+    saveProducts();
+    renderCardList();
+    logTo('ce_gen_log', '✅ 多人卡「' + cardName + '」已生成（共 ' + state.cardGroups.length + ' 张）', 'g');
+    flash('ce_gen_msg', '多人卡已生成');
+    flash('ce_cards_msg', '共 ' + state.cardGroups.length + ' 张卡');
+
+    extras.saveHistory({
+        id: Date.now(), type: 'card',
+        time: new Date().toLocaleString(),
+        title: '多人卡 · ' + cardName,
+        text,
+    });
+}
+
+/** 弹框询问多人卡卡名；返回 null 表示取消，返回字符串（可空）表示确认 */
+async function askEnsembleName(autoName) {
+    const html =
+        '<p class="ce-faint" style="margin:0 0 8px">给这张多人卡起一个卡名（整张卡只用这个名字）。留空则用：' +
+        escapeHtml(autoName) + '</p>' +
+        '<input type="text" id="ce_ens_name" class="text_pole" style="width:100%" placeholder="' +
+        escapeHtml(autoName) + '">';
+    let inputEl = null;             // 弹窗关闭后 DOM 可能被移除，先存引用
+    const ok = await popupForm({
+        title: '多人卡 · 卡名',
+        bodyHtml: html,
+        okLabel: '生成',
+        cancelLabel: '取消',
+        onOpen: (root) => {
+            inputEl = root.querySelector('#ce_ens_name');
+            if (inputEl) { inputEl.value = autoName; inputEl.focus(); inputEl.select(); }
+        },
+    });
+    if (!ok) return null;
+    return inputEl ? String(inputEl.value || '') : autoName;
+}
+
+/**
+ * 多人卡提示词：旁白制。
+ * @param {string[]} names 所选角色名
+ * @param {string} cardName 卡名（整张卡一个名字）
+ * @param {string} cctx 各角色相关片段拼接
+ * @param {{detail?:string, nsfw?:boolean}} opts
+ */
+function buildEnsemblePrompt(names, cardName, cctx, { detail, nsfw } = {}) {
+    const sys =
+        '你是严谨的角色卡抽取助手，负责把一部小说里的多个角色整合成**一张「多人卡」**。\n' +
+        '这张卡的核心人格是**旁白 / 主持人（GM）**：用第三人称做环境与场景描写、推进剧情、引导玩家游玩。\n' +
+        '工作原则：只依据原文，绝不臆造；严禁把某个角色的经历/设定安到别的角色头上；严禁 OOC。';
+    const withSys = settings().sysPrefix ? settings().sysPrefix + '\n\n' + sys : sys;
+
+    const nsfwRule = nsfw
+        ? '· 若原文涉及成人向内容，只依据原文，不编造。'
+        : '· 不要输出任何性相关内容。';
+    const detailRule = detail === 'concise'
+        ? '· 【篇幅：精简】各字段尽量简短，角色精要每人 2~4 句。'
+        : detail === 'rich'
+            ? '· 【篇幅：详尽】忠于原文的前提下尽量丰富具体。'
+            : '· 【篇幅：适中】各字段详略得当。';
+
+    const list = names.map((n) => '· ' + n).join('\n');
+
+    const user =
+        '请把下面这些角色整合成**一张多人卡**，卡名为「' + cardName + '」。\n\n' +
+        '本卡的角色：\n' + list + '\n\n' +
+        '【核心：旁白制】\n' +
+        '· 本卡的 {{char}} 是**旁白**，不是任何一个具体角色。旁白负责：环境/地点/动作描写、推动故事进展、引导玩家行动。\n' +
+        '· 旁白**不替玩家做决定**、**不冒充角色发言**；角色台词交给角色自己说。\n' +
+        '· 输出分为两层，泾渭分明：**旁白层**（叙述）与**对话层**（角色台词，明确标注是哪个角色说的）。\n\n' +
+        '【剧情推进与角色登场】\n' +
+        '· 开场**只有旁白**铺陈场景与引导，**不要点名任何角色**、不要让其现身。\n' +
+        '· 各角色的基本信息写进卡里（旁白心里知道），但**只有剧情推进到位时，旁白才安排该角色出场**，之后该角色才开口说话。\n' +
+        '· 严禁一开场就让所有角色同时登场；也严禁剧透尚未出场角色的后续信息。\n\n' +
+        '【填写要求】\n' +
+        '· description：世界观概括 + 旁白职责与约束 + 各角色精要（用「角色名：……」分条，覆盖身份/性格/与玩家关系，依据原文、简洁）。\n' +
+        '· personality：旁白的风格与准则（第三人称、简洁、推进剧情、不 OOC、不替玩家决定）。\n' +
+        '· scenario：开局场景（玩家此刻所处环境，不点名角色）。\n' +
+        '· first_mes：**旁白开场**——环境地点描写 + 引导玩家（示例口吻：「你身处……你可以……」），只出现旁白。\n' +
+        '· mes_example：**至少 2 组**「旁白叙述 + 角色台词」的分工示例，教 AI 如何分层（旁白用叙述句，角色台词标注角色名并用引号）。\n' +
+        (detailRule ? detailRule + '\n' : '') +
+        nsfwRule + '\n' +
+        '· 只依据原文，不编造；原文未提及的填「（原文未提及）」。\n\n' +
+        '【输出格式】严格输出**一个 JSON 对象**（不要代码块、不要解释），字段固定为：\n' +
+        '{\n' +
+        '  "name": "' + cardName + '",\n' +
+        '  "description": "……",\n' +
+        '  "personality": "……",\n' +
+        '  "scenario": "……",\n' +
+        '  "first_mes": "……",\n' +
+        '  "mes_example": "……"\n' +
+        '}\n\n' +
+        '=== 小说文本（与这些角色相关）===\n' + cctx;
+
+    return [{ role: 'system', content: withSys }, { role: 'user', content: user }];
 }
 
 function buildCardPrompt(nm, tmpl, cctx, { detail, nsfw, statPanel }) {

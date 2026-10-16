@@ -99,3 +99,31 @@ export async function listWorldbooks() {
     if (!c || typeof c.getWorldInfoNames !== 'function') return [];
     try { const names = await c.getWorldInfoNames(); return Array.isArray(names) ? names : []; } catch (e) { return []; }
 }
+
+/**
+ * 读取某本酒馆世界书，转成**内部条目格式**（title/keys/content/constant）。
+ * 用于打包导出（把世界书内嵌进卡）。
+ * @param {string} bookName
+ * @returns {Promise<Array>}
+ */
+export async function loadWorldbookEntries(bookName) {
+    const c = ctx();
+    const name = String(bookName || '').trim();
+    if (!c || typeof c.loadWorldInfo !== 'function' || !name) return [];
+    let data = {};
+    try { data = normalizeWorldInfo(await c.loadWorldInfo(name)); } catch (e) { return []; }
+    const out = [];
+    eachTavernEntry(data, (te) => {
+        const title = String(te.comment || te.name || '').trim();
+        if (!title) return;
+        const keys = Array.isArray(te.key) ? te.key.slice() : (te.key ? [te.key] : []);
+        out.push({
+            category: '',
+            title,
+            keys,
+            content: String(te.content || '').trim(),
+            constant: !!te.constant,
+        });
+    });
+    return out;
+}

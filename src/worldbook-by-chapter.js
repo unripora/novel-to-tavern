@@ -39,7 +39,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @param {{signal?:AbortSignal, logEl?:string}} [opts]
  * @returns {Promise<Array>} 条目数组
  */
-export async function extractEntriesInRange(text, label, { signal, logEl = 'ce_wb_log' } = {}) {
+export async function extractEntriesInRange(text, label, { signal, logEl = 'ce_wb_log', relatedMode = 'none' } = {}) {
     const src = String(text || '').trim();
     if (!src) return [];
     const size = chunkSizeOf();
@@ -49,6 +49,7 @@ export async function extractEntriesInRange(text, label, { signal, logEl = 'ce_w
     else logTo(logEl, `「${label}」共 ${cap} 段，开始提取…`);
 
     const nsfw = nsfwLine();
+    const wantRelated = relatedMode === 'light' || relatedMode === 'heavy';
     const map = new Map();
     for (let i = 0; i < cap; i++) {
         if (signal && signal.aborted) break;
@@ -61,7 +62,8 @@ export async function extractEntriesInRange(text, label, { signal, logEl = 'ce_w
             '注意：只写**此篇章范围内**成立的设定，不要混入其它篇章的内容。\n' +
             nsfw + '\n' +
             '输出 JSON 数组，每个元素：\n' +
-            '{"category":"分类(世界观/势力/地点/设定/历史/物品 之一)","title":"条目标题","keys":["触发关键词，用原文里会出现的名称/术语，2~5个"],"content":"该设定的说明，依据原文、简洁准确、不编造","constant":true 或 false}\n' +
+            '{"category":"分类(世界观/势力/地点/设定/历史/物品 之一)","title":"条目标题","keys":["触发关键词，用原文里会出现的名称/术语，2~5个"],"content":"该设定的说明，依据原文、简洁准确、不编造","constant":true 或 false' +
+            (wantRelated ? ',"related":["与该条目相关的人物名，2~5个"]' : '') + '}\n' +
             'constant：整体世界观/总背景 → true；具体的势力/地点/术语/物品 → false。\n' +
             '只输出 JSON 数组，不要代码块、不要解释。该段没有明确设定就输出 []。\n\n文本：\n' + chunk;
         let raw = '';
@@ -83,13 +85,17 @@ export async function extractEntriesInRange(text, label, { signal, logEl = 'ce_w
             if (!title) continue;
             const keys = Array.isArray(e.keys) ? e.keys.map((k) => String(k).trim()).filter(Boolean) : [];
             const content = String(e.content || '').trim();
+            const related = Array.isArray(e.related) ? e.related.map((s) => String(s).trim()).filter(Boolean) : [];
             if (map.has(title)) {
                 const ex = map.get(title);
                 for (const k of keys) if (!ex.keys.includes(k)) ex.keys.push(k);
+                for (const r of related) { ex.related = ex.related || []; if (!ex.related.includes(r)) ex.related.push(r); }
                 if (content.length > ex.content.length) ex.content = content;
                 ex.constant = ex.constant || !!e.constant;
             } else {
-                map.set(title, { category: String(e.category || '设定').trim(), title, keys, content, constant: !!e.constant });
+                const item = { category: String(e.category || '设定').trim(), title, keys, content, constant: !!e.constant };
+                if (wantRelated && related.length) item.related = related;
+                map.set(title, item);
             }
         }
         logTo(logEl, `${label} 第${i + 1}段 → 累计 ${map.size} 条`, 'g');
@@ -185,7 +191,7 @@ async function tasksInRange(seg, node, opt, { signal, logEl }) {
     // ① 提取条目（范围敏感 → 用范围实现）
     if (opt.extract) {
         logTo(logEl, `「${label}」▶ 提取条目`);
-        const list = await extractEntriesInRange(range, label, { signal, logEl });
+        const list = await extractEntriesInRange(range, label, { signal, logEl, relatedMode: opt.relatedMode || 'none' });
         out.push(...list);
     }
 

@@ -255,6 +255,29 @@ export async function loadOpts(rec) {
     return data || null;
 }
 
+/**
+ * 保存关系图谱（重档：人物-事件-地点关系）到工作区 _state/relations.json。
+ * @param {string} rec 记录名
+ * @param {{entities:Array, relations:Array}} graph
+ */
+export async function saveRelations(rec, graph) {
+    const data = { entities: (graph && graph.entities) || [], relations: (graph && graph.relations) || [], savedAt: Date.now() };
+    await pSet('relations:' + (rec ? safeName(rec) : ''), data);
+    await serverMaybeSave(wsPath(rec, DIR_STATE + '/relations.json'), JSON.stringify(data, null, 2));
+    return true;
+}
+
+/** 读取关系图谱（无则返回 {entities:[],relations:[]}） */
+export async function loadRelations(rec) {
+    let data = await pGet('relations:' + (rec ? safeName(rec) : ''));
+    if (!data) {
+        const txt = await serverRead(wsPath(rec, DIR_STATE + '/relations.json'));
+        if (txt) { try { data = JSON.parse(txt); } catch (e) { data = null; } }
+    }
+    if (!data || (!Array.isArray(data.entities) && !Array.isArray(data.relations))) return { entities: [], relations: [] };
+    return { entities: data.entities || [], relations: data.relations || [] };
+}
+
 /** 保存正文到工作区（<记录名>/novel.txt） */
 export async function saveNovelText(rec, text, name) {
     const body = String(text == null ? '' : text);

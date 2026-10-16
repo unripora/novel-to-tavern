@@ -187,4 +187,87 @@ export function buildCardPayload(card) {
     };
 }
 
-export default { parseCard, writeCharacterToTavern, exportCardJson, buildCardPayload };
+/**
+ * 把「世界书条目」转成 Card V2 内嵌的 character_book 条目格式。
+ * 与酒馆导出格式对齐（before_char / depth 4 / 内嵌常驻等）。
+ * @param {Array} entries 内部世界书条目
+ * @returns {Array}
+ */
+export function toCharacterBookEntries(entries) {
+    return (entries || []).map((e, i) => {
+        const title = String(e.title || '').trim();
+        const keys = [...(Array.isArray(e.keys) ? e.keys : []), ...(Array.isArray(e.relatedKeys) ? e.relatedKeys : [])];
+        return {
+            id: i,
+            keys,
+            secondary_keys: [],
+            comment: title,
+            name: title,
+            content: '【' + title + '】' + (e.category ? ('（' + e.category + '）') : '') + '\n' + (e.content || ''),
+            enabled: true,
+            constant: !!e.constant,
+            selective: !e.constant,
+            insertion_order: 100,
+            position: 'before_char',
+            case_sensitive: false,
+            priority: 10,
+            extensions: {
+                position: 0, exclude_recursion: false, display_index: i,
+                probability: 100, useProbability: true, depth: 4,
+                selectiveLogic: 0, group: '', vectorized: false,
+            },
+        };
+    });
+}
+
+/**
+ * 组装「完整角色卡」：把角色卡内容 + 主世界书内嵌为一张可导入酒馆的卡。
+ * @param {object} card 结构化角色卡（解析后）
+ * @param {Array} entries 该卡的主世界书条目
+ * @param {{bookName?:string, creatorNotes?:string}} [opts]
+ * @returns {object} Card V2 JSON 对象
+ */
+export function buildFullCard(card, entries = [], opts = {}) {
+    const c = card || {};
+    const name = c.name || '未命名角色';
+    const data = {
+        name,
+        description: c.description || c.raw || '',
+        personality: c.personality || '',
+        scenario: c.scenario || '',
+        first_mes: c.first_mes || '',
+        mes_example: c.mes_example || '',
+        creator_notes: c.creator_notes || opts.creatorNotes || '由「角色卡提取工具」插件生成',
+        system_prompt: '',
+        post_history_instructions: '',
+        alternate_greetings: c.alternate_greetings || [],
+        tags: c.tags || [],
+        creator: '',
+        character_version: '1.0',
+        extensions: c.extensions || {},
+    };
+    const list = (entries || []).filter(Boolean);
+    if (list.length) {
+        data.character_book = {
+            name: opts.bookName || (name + '的世界书'),
+            entries: toCharacterBookEntries(list),
+        };
+    }
+    return { name, description: data.description, first_mes: data.first_mes, spec: 'chara_card_v2', spec_version: '2.0', data };
+}
+
+/** 导出完整卡 JSON（下载） */
+export function exportFullCardJson(fullCard) {
+    const name = (fullCard && fullCard.name) || '角色';
+    const blob = new Blob([JSON.stringify(fullCard, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name.replace(/[\\/:*?"<>|、]/g, '_') + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export default { parseCard, writeCharacterToTavern, exportCardJson, buildCardPayload, toCharacterBookEntries, buildFullCard, exportFullCardJson };

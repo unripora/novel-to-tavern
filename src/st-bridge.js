@@ -414,6 +414,74 @@ export function currentCharName() {
     return c?.name2 || 'char';
 }
 
+/* ==================== 角色卡 ↔ 世界书绑定 ==================== */
+
+/**
+ * 把某本世界书设为**当前角色**的主世界书（Character Lore）。
+ *
+ * 优先用斜杠命令 `/setchatbook`（酒馆官方，见 world-info 命令）。
+ * 注：酒馆的「角色卡 ↔ 世界书」绑定以**当前角色**为对象，故调用前请先切换到目标角色。
+ *
+ * @param {string} bookName 世界书名
+ * @returns {Promise<{ok:boolean, message:string}>}
+ */
+export async function bindPrimaryWorldbook(bookName) {
+    const c = ctx();
+    const name = String(bookName || '').trim();
+    if (!name) return { ok: false, message: '世界书名不能为空' };
+    if (!c || typeof c.executeSlashCommandsWithOptions !== 'function') {
+        return { ok: false, message: '当前环境不支持斜杠命令，请手动绑定（角色管理 → 地球图标）' };
+    }
+    try {
+        const res = await c.executeSlashCommandsWithOptions('/setchatbook ' + name, { showOutput: false });
+        if (res === null || res === false) return { ok: false, message: '/setchatbook 执行失败，请手动绑定' };
+        return { ok: true, message: '已把「' + name + '」设为主世界书' };
+    } catch (e) {
+        return { ok: false, message: '/setchatbook 执行异常：' + e.message };
+    }
+}
+
+/**
+ * 解除当前角色的主世界书绑定（清空 char.world）。
+ * 通过斜杠命令 /setchatbook 传空名实现；失败则提示手动。
+ * @returns {Promise<{ok:boolean, message:string}>}
+ */
+export async function unbindPrimaryWorldbook() {
+    const c = ctx();
+    if (!c || typeof c.executeSlashCommandsWithOptions !== 'function') {
+        return { ok: false, message: '当前环境不支持斜杠命令，请手动解绑' };
+    }
+    try {
+        const res = await c.executeSlashCommandsWithOptions('/setchatbook ', { showOutput: false });
+        if (res === null || res === false) return { ok: false, message: '/setchatbook 解绑失败，请手动解绑' };
+        return { ok: true, message: '已解除主世界书绑定' };
+    } catch (e) {
+        return { ok: false, message: '/setchatbook 执行异常：' + e.message };
+    }
+}
+
+/**
+ * 尝试为当前角色链接**附属**世界书（酒馆「Link World Info」）。
+ * 酒馆未公开稳定 API，这里做**能力探测**，不可用时返回 ok:false，由上层提示手动操作。
+ * @param {string} bookName
+ * @returns {Promise<{ok:boolean, message:string}>}
+ */
+export async function linkExtraWorldbook(bookName) {
+    const c = ctx();
+    const name = String(bookName || '').trim();
+    if (!name) return { ok: false, message: '世界书名不能为空' };
+    // 已知可用的斜杠命令仅 /setchatbook（设主本）；附属链接暂无稳定命令。
+    // 探测酒馆是否提供内部函数（不同版本可能不同），有则用之。
+    try {
+        const fn = c && (c.linkWorldInfo || c.addCharacterLore || globalThis.linkWorldInfo);
+        if (typeof fn === 'function') {
+            const res = await fn(name);
+            if (res !== false) return { ok: true, message: '已链接附属世界书：' + name };
+        }
+    } catch (e) { /* 落到提示 */ }
+    return { ok: false, message: '无法自动链接附属世界书，请手动：角色管理 → Shift 点地球图标 → 选择「' + name + '」' };
+}
+
 /* ==================== 弹窗（酒馆原生优先，回落自建） ==================== */
 
 /**
@@ -483,4 +551,5 @@ export default {
     ctx, inTavern, hasApi, aiRaw, aiQuiet, substitute,
     currentUserName, currentCharName, popupForm,
     serverAvailable, serverSave, serverList, serverRead, serverDel,
+    bindPrimaryWorldbook, unbindPrimaryWorldbook, linkExtraWorldbook,
 };

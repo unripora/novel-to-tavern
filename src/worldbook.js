@@ -148,6 +148,15 @@ export function syncWbFromPreview(previewText, entries, onShrink) {
     if (!parsed.length) { logTo('ce_wb_log', '预览框内容无法解析成条目（格式需保持「===== 序号. 标题 =====」那套），导出将沿用上次的结果', 'e'); return entries; }
     // 防丢失：解析结果比原来少很多时，多半是手滑删坏了预览，交由上层确认，避免静默丢条目
     if (entries.length >= 5 && parsed.length < entries.length * 0.6 && !(onShrink ? onShrink(parsed, entries) : true)) return entries;
+    // 预览文本不含内部字段（related/relatedKeys/enterSticky），按 title 从原条目回填，避免编辑预览后丢失
+    const byTitle = new Map((entries || []).map((e) => [e.title, e]));
+    for (const e of parsed) {
+        const old = byTitle.get(e.title);
+        if (!old) continue;
+        if (old.related && old.related.length) e.related = old.related;
+        if (old.relatedKeys && old.relatedKeys.length) e.relatedKeys = old.relatedKeys;
+        if (old.enterSticky) e.enterSticky = old.enterSticky;
+    }
     return parsed;
 }
 
@@ -168,7 +177,7 @@ function nsfwLineWorld() {
 }
 
 /** 【任务1】提取世界书条目：分段逐段提取世界观/势力/地点/设定/历史/物品（原 wbExtractCore，支持断点续跑） */
-export async function wbExtractCore({ signal, entries = [], state = null, onProgress, onSegment } = {}) {
+export async function wbExtractCore({ signal, entries = [], state = null, onProgress, onSegment, relatedMode = 'none' } = {}) {
     const text = getNovel().trim();
     const size = chunkSizeOf();
     const totalChunks = Math.ceil(text.length / size);
@@ -186,6 +195,7 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
         logTo('ce_wb_log', '共 ' + cap + ' 段，开始提取…');
     }
     const nsfw = nsfwLineWorld();
+    const wantRelated = relatedMode === 'light' || relatedMode === 'heavy';
     for (let i = startI; i < cap; i++) {
         if (signal && signal.aborted) break;
         const chunk = chunkAt(i);
@@ -197,8 +207,10 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
             '不要提取具体角色的个人档案（那属于角色卡）；群体性的身份/种族/阵营设定可以。\n' +
             nsfw + '\n' +
             '输出 JSON 数组，每个元素：\n' +
-            '{"category":"分类(世界观/势力/地点/设定/历史/物品 之一)","title":"条目标题","keys":["触发关键词，用原文里会出现的名称/术语，2~5个"],"content":"该设定的说明，依据原文、简洁准确、不编造","constant":true 或 false}\n' +
+            '{"category":"分类(世界观/势力/地点/设定/历史/物品 之一)","title":"条目标题","keys":["触发关键词，用原文里会出现的名称/术语，2~5个"],"content":"该设定的说明，依据原文、简洁准确、不编造","constant":true 或 false' +
+            (wantRelated ? ',"related":["与该条目相关的人物名，2~5个（事件/势力/地点尤其要标出涉及哪些角色）"]' : '') + '}\n' +
             'constant：整体世界观/总背景 → true（建议常驻）；具体的势力/地点/术语/物品 → false（关键词触发）。\n' +
+            (wantRelated ? 'related：列出与该条目紧密相关的人物姓名（仅原文出现的角色名，不要编造）。\n' : '') +
             '只输出 JSON 数组，不要代码块、不要解释。该段没有明确设定就输出 []。\n\n文本：\n' + chunk;
         let raw = '';
         const onWait = (n, code, w) => logTo('ce_wb_log', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
@@ -224,13 +236,17 @@ export async function wbExtractCore({ signal, entries = [], state = null, onProg
             if (!title) continue;
             const keys = Array.isArray(e.keys) ? e.keys.map((k) => String(k).trim()).filter(Boolean) : [];
             const content = String(e.content || '').trim();
+            const related = Array.isArray(e.related) ? e.related.map((s) => String(s).trim()).filter(Boolean) : [];
             if (map.has(title)) {
                 const ex = map.get(title);
                 for (const k of keys) if (!ex.keys.includes(k)) ex.keys.push(k);
+                for (const r of related) { ex.related = ex.related || []; if (!ex.related.includes(r)) ex.related.push(r); }
                 if (content.length > ex.content.length) ex.content = content;
                 ex.constant = ex.constant || !!e.constant;
             } else {
-                map.set(title, { category: String(e.category || '设定').trim(), title, keys, content, constant: !!e.constant });
+                const item = { category: String(e.category || '设定').trim(), title, keys, content, constant: !!e.constant };
+                if (wantRelated && related.length) item.related = related;
+                map.set(title, item);
             }
         }
         state.next = i + 1;
@@ -303,8 +319,132 @@ export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, max
     return [{ category: '人物', title: '配角群像合集', keys: uniq(keys).slice(0, 80), content, constant: false }];
 }
 
+/**
+ * 【角色 & 世界专用】为指定的**任意角色**逐个生成世界书条目（绿灯）。
+ *
+ * 与 wbMinorCore 的区别：
+ *  - wbMinorCore 只做配角；本函数接受任意角色（含主角），由调用方选。
+ *  - 每条附带 `related`（关联事件/地点）与 `relatedKeys`（登场触发词），
+ *    供「角色 & 世界」Tab 的关联/登场用途（内部字段，写酒馆时不直接落库）。
+ *
+ * @param {object} o
+ * @param {string[]} o.names 角色名数组（必填）
+ * @param {'none'|'light'|'heavy'} [o.relatedMode='none'] 关联人物强度（light/heavy 均产出 related/relatedKeys）
+ * @param {AbortSignal} [o.signal]
+ * @param {boolean} [o.nsfw]
+ * @param {(cur:number,total:number,name:string)=>void} [o.onProgress]
+ * @returns {Promise<Array>} 条目数组
+ */
+export async function genCharEntries({ names = [], relatedMode = 'none', signal, nsfw = false, onProgress } = {}) {
+    const list = (names || []).map((n) => String(n).trim()).filter(Boolean);
+    if (!list.length) { logTo('ce_wc_log', '角色条目：未选择角色', 'e'); return []; }
+    const sample = sampleForStyle(getNovel().trim());
+    const wantRelated = relatedMode === 'light' || relatedMode === 'heavy';
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+        if (signal && signal.aborted) break;
+        const nm = list[i];
+        if (onProgress) onProgress(i, list.length, nm);
+        if (i > 0) await sleep(300);
+        const prompt =
+            '下面是小说节选。请为角色「' + nm + '」写**一条世界书条目**（用于多人卡：让 AI 知道 TA 是谁、何时该登场）。\n' +
+            '要求：写清身份、性格、与主角及他人的关系、重要经历；依据原文、简洁准确、不编造。\n' +
+            'keys：该角色会被提到的名称/别名/称呼，2~5 个。\n' +
+            (wantRelated
+                ? 'related：与该角色紧密相关的**事件/地点/势力**名称，2~5 个（用于判断剧情何时该让 TA 登场）。\n' +
+                  'relatedKeys：从 related 里提炼出的**登场触发词**（读者/旁白会提到的词），2~6 个。\n'
+                : '') +
+            (nsfw ? '可包含成人向设定，同样只依据原文。\n' : '不要涉及成人 / 性相关内容。\n') +
+            '输出 JSON 对象（不要数组、不要代码块、不要解释）：\n' +
+            '{"title":"' + nm + '","keys":[],' + (wantRelated ? '"related":[],"relatedKeys":[],' : '') + '"content":"该角色的世界书条目正文"}\n\n' +
+            '=== 小说节选 ===\n' + sample;
+        let raw = '';
+        try {
+            raw = await generate(userMsgs(prompt), {
+                signal, useStream: !!settings().useStream,
+                maxCont: settings().autoCont ? 3 : 0, logEl: 'ce_wc_log', label: '角色条目·' + nm,
+            });
+        } catch (err) {
+            if (isAbort(err, signal)) break;
+            logTo('ce_wc_log', nm + ' 生成失败：' + err.message, 'e');
+            continue;
+        }
+        const obj = extractJsonObject(raw);
+        if (!obj || (!obj.content && !obj.title)) { logTo('ce_wc_log', nm + '：解析失败，已跳过', 'e'); continue; }
+        const title = String(obj.title || nm).trim() || nm;
+        const keys = Array.isArray(obj.keys) ? obj.keys.map((k) => String(k).trim()).filter(Boolean) : [];
+        if (!keys.includes(nm)) keys.unshift(nm);
+        const entry = { category: '人物', title, keys, content: String(obj.content || '').trim(), constant: false, enterSticky: 3 };
+        if (wantRelated) {
+            entry.related = Array.isArray(obj.related) ? obj.related.map((s) => String(s).trim()).filter(Boolean) : [];
+            entry.relatedKeys = Array.isArray(obj.relatedKeys) ? obj.relatedKeys.map((s) => String(s).trim()).filter(Boolean) : [];
+        }
+        out.push(entry);
+        logTo('ce_wc_log', '已生成角色条目：' + title, 'g');
+    }
+    return out;
+}
+
+/** 容错：从模型返回里取出一个 JSON 对象 */
+function extractJsonObject(s) {
+    const t = stripFence(stripThink(String(s || '')));
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a < 0 || b < 0 || b < a) return null;
+    let body = t.slice(a, b + 1);
+    try { return JSON.parse(body); }
+    catch (e) {
+        body = body.replace(/,(\s*[\]}])/g, '$1');
+        try { return JSON.parse(body); } catch (e2) { return null; }
+    }
+}
+
+/**
+ * 【重档】实体-关系抽取：产出「人物-事件-地点」关系图谱（entities/relations）。
+ * 用于「角色 & 世界」Tab 的双向查询（从角色找事件 / 从事件找角色）。
+ *
+ * @param {object} o
+ * @param {AbortSignal} [o.signal]
+ * @param {number} [o.maxTokens]
+ * @returns {Promise<{entities:Array, relations:Array}>}
+ */
+export async function relExtractCore({ signal, maxTokens } = {}) {
+    const sample = sampleForStyle(getNovel().trim());
+    if (!sample) { logTo('ce_wc_log', '关系抽取：请先导入小说', 'e'); return { entities: [], relations: [] }; }
+    const prompt =
+        '请从下面的小说节选中，抽取「实体」与它们之间的「关系」，构建一张关系图谱。\n' +
+        '实体类型：角色 / 事件 / 地点 / 势力。\n' +
+        '关系示例：角色-参与-事件、角色-隶属-势力、事件-发生地-地点、角色-位于-地点。\n' +
+        '只依据原文，不编造。\n\n' +
+        '输出 JSON 对象（不要代码块、不要解释）：\n' +
+        '{\n' +
+        '  "entities": [{"id":"e1","type":"角色","name":"桐人"}],\n' +
+        '  "relations": [{"from":"e1","rel":"参与","to":"e2"}]\n' +
+        '}\n' +
+        'id 自行编号（同一实体只出现一次）；relations 的 from/to 必须是 entities 里出现过的 id。\n\n' +
+        '=== 小说节选 ===\n' + sample;
+    let raw = '';
+    try {
+        raw = await generate(userMsgs(prompt), {
+            signal, useStream: !!settings().useStream,
+            maxTokens: Math.max(4000, Number(maxTokens) || 4000),
+            maxCont: settings().autoCont ? 3 : 0, logEl: 'ce_wc_log', label: '关系抽取',
+        });
+    } catch (err) {
+        if (isAbort(err, signal)) return { entities: [], relations: [] };
+        logTo('ce_wc_log', '关系抽取失败：' + err.message, 'e');
+        return { entities: [], relations: [] };
+    }
+    const obj = extractJsonObject(raw);
+    if (!obj || !Array.isArray(obj.entities)) { logTo('ce_wc_log', '关系抽取：解析失败', 'e'); return { entities: [], relations: [] }; }
+    const entities = obj.entities.filter((e) => e && e.id && e.name).map((e) => ({ id: String(e.id), type: String(e.type || '角色'), name: String(e.name).trim() }));
+    const rels = Array.isArray(obj.relations) ? obj.relations.filter((r) => r && r.from && r.to) : [];
+    logTo('ce_wc_log', '关系抽取完成：实体 ' + entities.length + '、关系 ' + rels.length, 'g');
+    return { entities, relations: rels };
+}
+
+
 /** 【任务4】剧情分段：每阶段/副本一条绿灯条目（≥300字）。迁移自原 wbPlotCore；支持断点续跑。 */
-export async function wbPlotCore({ signal, entries = [], state = null, onProgress, onSegment } = {}) {
+export async function wbPlotCore({ signal, entries = [], state = null, onProgress, onSegment, relatedMode = 'none' } = {}) {
     const text = getNovel().trim();
     const size = Math.max(50000, Number(settings().chunkSize) || 40000);
     const totalChunks = Math.ceil(text.length / size);
@@ -315,6 +455,7 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
     if (resuming) logTo('ce_wb_log', '剧情分段：从第 ' + (startI + 1) + '/' + cap + ' 段继续…');
     else { state = { len: text.length, cap, next: 0 }; logTo('ce_wb_log', '剧情分段：共 ' + cap + ' 段，开始…'); }
     const nsfw = settings().nsfw ? '可包含成人向剧情。' : '不必回避剧情，但不要展开露骨性描写。';
+    const wantRelated = relatedMode === 'light' || relatedMode === 'heavy';
     let addedTotal = 0;
     for (let i = startI; i < cap; i++) {
         if (signal && signal.aborted) break;
@@ -327,8 +468,9 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
             '- title：阶段 / 副本的名称\n' +
             '- keys：触发关键词（该阶段会被提到的名称、地点、副本名等，2~5个）\n' +
             '- content：该阶段的剧情总结，**不少于 300 字**，必须包含【重要出场角色、事件的前因后果、重要道具、时间线】，**不可遗漏任何剧情和伏笔**。\n' +
+            (wantRelated ? '- related：该阶段**出场/涉及的人物姓名**列表（2~6个，仅原文出现的角色名）。\n' : '') +
             nsfw + '\n' +
-            '只依据原文、不编造。输出 JSON 数组 [{"title":"","keys":[],"content":""}]，只输出 JSON，不要代码块、不要解释。该段无实质剧情就输出 []。\n\n文本：\n' + chunk;
+            '只依据原文、不编造。输出 JSON 数组 [{"title":"","keys":[],"content":""' + (wantRelated ? ',"related":[]' : '') + '}]，只输出 JSON，不要代码块、不要解释。该段无实质剧情就输出 []。\n\n文本：\n' + chunk;
         let raw = '';
         const onWait = (n, code, w) => logTo('ce_wb_log', '第' + (i + 1) + '段 HTTP ' + code + '，' + (w / 1000) + 's 后重试(' + n + ')', 'e');
         try {
@@ -354,6 +496,10 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
             const keys = Array.isArray(e.keys) ? e.keys.map((k) => String(k).trim()).filter(Boolean) : [];
             if (!keys.includes(rawTitle)) keys.unshift(rawTitle);
             const entry = { category: '剧情', title: '剧情·' + rawTitle, keys, content: String(e.content).trim(), constant: false };
+            if (wantRelated) {
+                const related = Array.isArray(e.related) ? e.related.map((s) => String(s).trim()).filter(Boolean) : [];
+                if (related.length) entry.related = related;
+            }
             const idx = entries.findIndex((x) => x.title === entry.title);
             if (idx >= 0) entries[idx] = entry; else entries.push(entry);
             addedTotal++;
@@ -401,9 +547,12 @@ function genUid() { return Date.now() + Math.floor(Math.random() * 100000); }
 /** 把内部条目转换为酒馆 World Info 条目结构（保留 key/comment/content/constant 等核心字段） */
 export function toTavernEntry(e, userReplace = {}, idx = 0) {
     const rn = replaceNameOf(userReplace);
+    // 登场触发词（relatedKeys）并入 key，实现「剧情命中关键词即登场」
+    const extraKeys = Array.isArray(e.relatedKeys) ? e.relatedKeys : [];
+    const key = uniq([...wbSubKeys(e.keys, rn), ...extraKeys]);
     return {
         uid: genUid() + idx,
-        key: wbSubKeys(e.keys, rn),
+        key,
         keysecondary: [],
         comment: wbSub(e.title, rn) || '',
         content: wbSub(e.content, rn) || '',
@@ -411,12 +560,14 @@ export function toTavernEntry(e, userReplace = {}, idx = 0) {
         selective: true,
         order: 100,
         position: 0,             // 0 = 角色定义之前
+        depth: 4,                // 与 buildWbJson 一致（论坛：插入 @ 深度 4）
+        sticky: Number(e.enterSticky) > 0 ? Number(e.enterSticky) : 0,  // 出场后留场轮数（>0 生效）
         disable: false,
     };
 }
 
 /* 写入酒馆 / 列表面板逻辑已拆分至 worldbook-write.js，此处转发以保持兼容 */
-export { writeWorldbookToTavern, listWorldbooks, boundWorldbookName } from './worldbook-write.js';
+export { writeWorldbookToTavern, listWorldbooks, boundWorldbookName, loadWorldbookEntries } from './worldbook-write.js';
 
 /* 世界书解耦（通用本 + 各篇章本）逻辑已拆分至 worldbook-split.js，此处转发以保持兼容 */
 export { classifyEntries, writeSplitWorldbooks } from './worldbook-split.js';
@@ -425,5 +576,6 @@ export default {
     WB_FMT,
     wbSub, wbSubKeys, buildWbPreview, buildWbJson, parseWbPreview, syncWbFromPreview,
     wbExtractCore, wbBgCore, wbMinorCore, wbPlotCore, wbConstantEntry,
+    genCharEntries, relExtractCore,
     toTavernEntry,
 };

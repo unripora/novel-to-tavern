@@ -13,6 +13,7 @@ import { renderNovelTab } from './ui-novel.js';
 import { renderCardTab } from './ui-card.js';
 import { renderTimelineTab } from './ui-timeline.js';
 import { renderWorldTab } from './ui-world.js';
+import { renderWorldCardTab } from './ui-worldcard.js';
 import {
     renderPersonaTab, renderStyleTab,
     renderFirstTab, renderCheckTab, renderHistoryTab,
@@ -25,6 +26,7 @@ const TABS = {
     card: renderCardTab,
     persona: renderPersonaTab,
     world: renderWorldTab,
+    worldcard: renderWorldCardTab,
     style: renderStyleTab,
     first: renderFirstTab,
     check: renderCheckTab,

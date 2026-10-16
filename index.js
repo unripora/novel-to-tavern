@@ -203,6 +203,7 @@ const SETTINGS_HTML = `
             <button type="button" class="ce-tab" data-tab="card">角色卡</button>
             <button type="button" class="ce-tab" data-tab="persona">人设</button>
             <button type="button" class="ce-tab" data-tab="world">世界书</button>
+            <button type="button" class="ce-tab" data-tab="worldcard">角色 &amp; 世界</button>
             <button type="button" class="ce-tab" data-tab="style">文风</button>
             <button type="button" class="ce-tab" data-tab="first">开场白</button>
             <button type="button" class="ce-tab" data-tab="check">自检</button>
