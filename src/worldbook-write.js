@@ -66,6 +66,7 @@ export async function writeWorldbookToTavern(bookName, entries, mode = 'new', op
     try { data = normalizeWorldInfo(await c.loadWorldInfo(name)); } catch (e) { data = normalizeWorldInfo({}); }
 
     // 冲突检测：与已存在条目按标题/关键词比对（不静默覆盖）
+    const strategy = opts.strategy === 'skip' ? 'skip' : 'append';
     const conflicts = [];
     eachTavernEntry(data, (te) => {
         const ex = { title: te.comment || '', keys: Array.isArray(te.key) ? te.key : (te.key ? [te.key] : []) };
@@ -76,10 +77,14 @@ export async function writeWorldbookToTavern(bookName, entries, mode = 'new', op
     const entriesObj = data.entries;
     let maxUid = 0;
     Object.values(entriesObj).forEach((te) => { if (te && typeof te.uid === 'number') maxUid = Math.max(maxUid, te.uid); });
+    // skip 策略下，与已有条目冲突的新条目直接跳过
+    const conflictTitles = new Set(conflicts.map((c) => c.title));
     let added = 0;
+    let skipped = 0;
     list.forEach((e, i) => {
+        if (strategy === 'skip' && conflictTitles.has(e.title)) { skipped++; return; }
         const te = toTavernEntry(e, userReplace, i);
-        te.uid = maxUid + 1 + i;
+        te.uid = maxUid + 1 + added;
         entriesObj[String(te.uid)] = te;
         added++;
     });
@@ -89,8 +94,10 @@ export async function writeWorldbookToTavern(bookName, entries, mode = 'new', op
         return { ok: false, bookName: name, count: 0, conflicts, message: '保存世界书失败：' + e.message };
     }
 
-    const msg = '已写入世界书「' + name + '」：新增 ' + added + ' 条' + (conflicts.length ? ('，其中 ' + conflicts.length + ' 条与已有条目关键词/标题重复，请检查是否覆盖') : '');
-    return { ok: true, bookName: name, count: added, conflicts, message: msg };
+    const msg = '已写入世界书「' + name + '」：新增 ' + added + ' 条'
+        + (skipped ? ('，跳过重复 ' + skipped + ' 条') : '')
+        + (conflicts.length ? ('，检测到与已有条目关键词/标题重复 ' + conflicts.length + ' 条') : '');
+    return { ok: true, bookName: name, count: added, skipped, conflicts, message: msg };
 }
 
 /** 列出酒馆中已有世界书名（若 API 支持） */

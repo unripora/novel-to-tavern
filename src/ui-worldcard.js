@@ -15,6 +15,7 @@ import * as novel from './novel.js';
 import * as worldbook from './worldbook.js';
 import * as persistMod from './persist.js';
 import * as writer from './card-writer.js';
+import * as timeline from './timeline.js';
 import { bindPrimaryWorldbook, unbindPrimaryWorldbook, linkExtraWorldbook } from './st-bridge.js';
 import { $, state, escapeHtml, escapeAttr } from './ui-context.js';
 
@@ -24,6 +25,7 @@ const wc = {
     running: false,
     controller: null,
     lastEntries: [],    // 最近一次生成的角色条目（供绑定/打包参考）
+    lastRange: null,    // 最近一次生成所用的原文范围（由「原文范围」下拉决定，非世界书自带）
 };
 
 /** 工作区记录名（与小说 Tab 一致，用于落盘分区） */
@@ -37,8 +39,9 @@ export function renderWorldCardTab(box) {
             <div class="ce-section">
                 <label class="ce-label">① 角色 → 世界书条目</label>
                 <p class="ce-faint">
-                    选择角色，为每个角色生成一条**世界书条目**（绿灯），追加进目标世界书。
-                    已有条目不会被覆盖，只做追加。
+                    选择角色，为每个角色生成一条**世界书条目**（绿灯），追加进「目标世界书」。
+                    已有条目不会被覆盖（按所选冲突策略处理）。
+                    「原文范围」决定角色从此处检索原文：<b>全书</b>＝全书抽样；<b>选某卷</b>＝只在该卷正文范围内找（与目标世界书叫什么无关，改名也不受影响）。
                 </p>
                 <div class="ce-rowline">
                     <label>关联人物强度</label>
@@ -53,6 +56,15 @@ export function renderWorldCardTab(box) {
                     <label>目标世界书</label>
                     <select id="ce_wc_target" class="text_pole" style="flex:1"><option value="">（载入中…）</option></select>
                     <button type="button" class="menu_button" id="ce_wc_load">刷新列表</button>
+                </div>
+                <div class="ce-rowline">
+                    <label>原文范围</label>
+                    <select id="ce_wc_range" class="text_pole" style="flex:1"><option value="">全书</option></select>
+                    <label>冲突策略</label>
+                    <select id="ce_wc_conflict" class="text_pole">
+                        <option value="append" selected>追加（保留已有）</option>
+                        <option value="skip">跳过重复</option>
+                    </select>
                 </div>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_wc_sel_all">全选角色</button>
@@ -174,12 +186,19 @@ async function runGenCharEntries() {
 
     const related = $('ce_wc_related')?.value || 'light';
     const nsfw = !!$('ce_wc_nsfw')?.checked;
+    const target = $('ce_wc_target')?.value || '';
+    const rangeVal = $('ce_wc_range')?.value || '';
     try {
+        // 原文范围：由「原文范围」下拉决定（手动指定，独立于目标世界书；不选=全书抽样）
+        wc.lastRange = resolveRangeByNodeId(rangeVal);
+        if (wc.lastRange) logTo('ce_wc_log', `原文范围：卷「${wc.lastRange.name}」${wc.lastRange.start}~${wc.lastRange.end}，将只在该段正文内检索角色。`, 'g');
+        else logTo('ce_wc_log', '原文范围：全书（未指定卷，按全书抽样）。', 'g');
         flash('ce_wc_msg', '生成角色条目…', false, { persist: true });
         const entries = await worldbook.genCharEntries({
             names: wc.selected.slice(),
             relatedMode: related,
             nsfw, signal,
+            range: wc.lastRange ? { start: wc.lastRange.start, end: wc.lastRange.end } : null,
             onProgress: (i, total, nm) => { flash('ce_wc_msg', `生成角色条目 ${i + 1}/${total} · ${nm}…`, false, { persist: true }); },
         });
         wc.lastEntries = entries;
@@ -202,50 +221,67 @@ async function runGenCharEntries() {
     }
 }
 
-/** 把 lastEntries 追加写入目标世界书（酒馆已有书则合并，否则本地落盘） */
+/**
+ * 「写入目标世界书」：
+ *  - 甲：本地（工作区）若有同名卷 → **就写本地那本**，同时**也写酒馆同名书**（两者都写）。
+ *  - 无同名 → 新建本地卷，并（若酒馆可写）新建/合并到酒馆同名书。
+ *  - 冲突策略：append＝保留已有全部；skip＝跳过与已有条目标题/关键词重复的新条目。
+ */
 async function writeEntriesToTarget() {
     const entries = wc.lastEntries || [];
     if (!entries.length) { flash('ce_wc_msg', '请先生成角色条目', true); return; }
-    const target = $('ce_wc_target')?.value || '';
-    // 目标为酒馆已有书 → 直接追加写入酒馆
+    const target = ($('ce_wc_target')?.value || '').trim();
+    const strategy = $('ce_wc_conflict')?.value || 'append';
+    const rec = currentRec();
+
+    // 1) 本地那份：若已有同名卷则合并进去，否则新建
+    let localBook = null;
+    if (target) { try { localBook = await persistMod.loadChapterBook(rec, target); } catch (e) { /* 忽略 */ } }
+    const baseEntries = (localBook && Array.isArray(localBook.entries)) ? localBook.entries : [];
+    const mergedLocal = mergeEntries(baseEntries, entries, { strategy });
+    const skippedLocal = mergedLocal.skipped || 0;
+    const bookName = target || '角色条目';
+    try {
+        await persistMod.saveChapterBook(rec, bookName, mergedLocal);
+        logTo('ce_wc_log', `已写入本地工作区「${bookName}」：${localBook ? '合并进已有卷' : '新建卷'}，共 ${mergedLocal.length} 条${skippedLocal ? `（跳过重复 ${skippedLocal} 条）` : ''}。`, 'g');
+    } catch (e) {
+        logTo('ce_wc_log', '本地落盘失败：' + e.message, 'e');
+    }
+
+    // 2) 酒馆那份：有目标书就写酒馆同名（追加/跳过），无目标书则跳过
     if (target) {
         try {
-            const r = await worldbook.writeWorldbookToTavern(target, entries, 'append');
+            const r = await worldbook.writeWorldbookToTavern(target, entries, 'append', { strategy });
             logTo('ce_wc_log', r.message, r.ok ? 'g' : 'e');
-            flash('ce_wc_msg', r.ok ? ('已追加 ' + r.count + ' 条到「' + target + '」') : r.message, !r.ok);
+            flash('ce_wc_msg', r.ok ? `已写入「${target}」（本地＋酒馆）` : r.message, !r.ok);
         } catch (e) {
-            logTo('ce_wc_log', '写入失败：' + e.message, 'e');
-            flash('ce_wc_msg', '写入失败', true);
+            logTo('ce_wc_log', '写入酒馆失败：' + e.message, 'e');
+            flash('ce_wc_msg', '已写本地；酒馆写入失败', true);
         }
-        return;
+    } else {
+        flash('ce_wc_msg', '已落盘工作区「' + bookName + '」（未指定目标世界书，未写酒馆）');
+        logTo('ce_wc_log', '未指定目标世界书，仅落盘工作区。', 'g');
     }
-    // 无目标：落盘到工作区（新建角色条目文件）
-    const rec = currentRec();
-    try {
-        const existing = await persistMod.loadChapterBook(rec, '角色条目');
-        const merged = existing ? mergeEntries(existing.entries || [], entries) : entries;
-        await persistMod.saveChapterBook(rec, '角色条目', merged);
-        logTo('ce_wc_log', '已落盘到工作区「角色条目」（共 ' + merged.length + ' 条）。可在酒馆里导入或用于打包。', 'g');
-        flash('ce_wc_msg', '已落盘角色条目');
-        refreshBookLists();
-    } catch (e) {
-        logTo('ce_wc_log', '落盘失败：' + e.message, 'e');
-        flash('ce_wc_msg', '落盘失败', true);
-    }
+    refreshBookLists();
 }
 
-/** 按标题合并条目（同标题合并关键词，内容取长） */
-function mergeEntries(base, add) {
+/** 按标题合并条目（同标题合并关键词，内容取长）；opts.strategy='skip' 时跳过重复的新条目 */
+function mergeEntries(base, add, opts = {}) {
+    const strategy = opts.strategy || 'append';
     const map = new Map((base || []).map((e) => [e.title, e]));
+    let skipped = 0;
     for (const e of (add || [])) {
         if (map.has(e.title)) {
+            if (strategy === 'skip') { skipped++; continue; }
             const ex = map.get(e.title);
             for (const k of (e.keys || [])) if (!ex.keys.includes(k)) ex.keys.push(k);
             for (const k of (e.relatedKeys || [])) { ex.relatedKeys = ex.relatedKeys || []; if (!ex.relatedKeys.includes(k)) ex.relatedKeys.push(k); }
             if ((e.content || '').length > (ex.content || '').length) ex.content = e.content;
         } else map.set(e.title, e);
     }
-    return [...map.values()];
+    const arr = [...map.values()];
+    arr.skipped = skipped;
+    return arr;
 }
 
 /* ==================== 关联查询 ==================== */
@@ -320,8 +356,10 @@ async function refreshBookLists() {
     const rec = currentRec();
     let local = [];
     try { local = await persistMod.listChapterBooks(rec); } catch (e) { /* 忽略 */ }
-    // 目标世界书：只能选**酒馆已有书**（用于「追加写入酒馆」）；空则落盘到工作区
-    fillSelect('ce_wc_target', tavern, true);
+    // 目标世界书：酒馆已有书 ∪ 本地已生成卷。目标书决定「条目写到哪」，与「原文范围」解耦。
+    fillSelect('ce_wc_target', [...new Set([...tavern, ...local])], true);
+    // 原文范围：时间线各卷（手动指定，独立于目标世界书）
+    fillRangeSelect();
     // 绑定/打包：主本与附属只能是酒馆书
     fillSelect('ce_wc_primary', tavern, false);
     fillSelect('ce_wc_extra', tavern, false);
@@ -337,6 +375,40 @@ function fillSelect(id, names, allowEmpty) {
         .concat((names || []).map((n) => `<option value="${escapeAttr(n)}">${escapeHtml(n)}</option>`));
     sel.innerHTML = opts.join('');
     if (cur && (names || []).includes(cur)) sel.value = cur;
+}
+
+/**
+ * 解析「原文范围」下拉值 → 实际范围。
+ * 下拉 value 为时间线节点 id；空串（全书）返回 null。
+ * 该卷未划范围（end<=start）时返回 null（等同全书）。
+ * @param {string} nodeId
+ * @returns {{name:string,start:number,end:number}|null}
+ */
+function resolveRangeByNodeId(nodeId) {
+    const id = String(nodeId || '').trim();
+    if (!id) return null;
+    const nodes = (timeline.getTimeline().nodes || []);
+    const node = nodes.find((n) => String(n.id) === id);
+    if (!node) return null;
+    const start = Number(node.start);
+    const end = Number(node.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    return { name: node.name || id, start, end };
+}
+
+/** 填充「原文范围」下拉：全书 + 时间线各卷（带范围/未带范围都列出，未带范围的标注提示） */
+function fillRangeSelect() {
+    const sel = $('ce_wc_range');
+    if (!sel) return;
+    const nodes = (timeline.getTimeline().nodes || []);
+    const cur = sel.value;
+    const opts = ['<option value="">全书（不限定范围）</option>'];
+    nodes.forEach((n) => {
+        const has = Number.isFinite(Number(n.start)) && Number.isFinite(Number(n.end)) && Number(n.end) > Number(n.start);
+        opts.push(`<option value="${escapeAttr(String(n.id))}">${escapeHtml(n.name || n.id)}${has ? '' : '（未划范围）'}</option>`);
+    });
+    sel.innerHTML = opts.join('');
+    if (cur && nodes.some((n) => String(n.id) === cur)) sel.value = cur;
 }
 
 async function doBind() {

@@ -692,7 +692,7 @@ async function runGenerateEnsemble() {
     const names = state.selectedNames.slice();
     // 卡名：弹框让用户填一个（留空自动拼）
     const autoName = names.join('、');
-    let cardName = await askEnsembleName(autoName);
+    let cardName = await askEnsembleName(autoName, names.length);
     if (cardName == null) return;            // 用户取消
     cardName = cardName.trim() || autoName;
 
@@ -768,8 +768,13 @@ async function runGenerateEnsemble() {
 }
 
 /** 弹框询问多人卡卡名；返回 null 表示取消，返回字符串（可空）表示确认 */
-async function askEnsembleName(autoName) {
+async function askEnsembleName(autoName, count = 0) {
+    const tip = (count > 5)
+        ? '<p style="margin:0 0 8px;color:#c2410c">提示：你选了 ' + count + ' 个角色。多人卡角色过多会稀释 AI 的注意力、' +
+          '容易串味与失忆，**建议聚焦 3~5 个核心角色**，其余用世界书条目按剧情出场。</p>'
+        : '';
     const html =
+        tip +
         '<p class="ce-faint" style="margin:0 0 8px">给这张多人卡起一个卡名（整张卡只用这个名字）。留空则用：' +
         escapeHtml(autoName) + '</p>' +
         '<input type="text" id="ce_ens_name" class="text_pole" style="width:100%" placeholder="' +

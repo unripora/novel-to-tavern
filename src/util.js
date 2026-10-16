@@ -74,6 +74,20 @@ export function uniq(arr) {
     return [...new Set((arr || []).filter(Boolean))];
 }
 
+/**
+ * 规范化「原文范围」对象（世界书自带范围用）。
+ * 只有 start/end 都是有限数且 end > start 时才有效，否则返回 null。
+ * @param {{start:number,end:number}|null|undefined} r
+ * @returns {{start:number,end:number}|null}
+ */
+export function normalizeRange(r) {
+    if (!r || typeof r !== 'object') return null;
+    const start = Number(r.start);
+    const end = Number(r.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    return { start: Math.max(0, Math.floor(start)), end: Math.floor(end) };
+}
+
 /** 日志缓存钩子（由 ui-context 注入，避免循环依赖） */
 let _logCacheHook = null;   // (elId, line) => void
 let _logClearHook = null;   // (elId) => void
@@ -138,5 +152,5 @@ export function clearFlash(elId) {
 
 export default {
     toast, yieldToUI, stripFence, stripThink, dispThink,
-    extractJsonArray, uniq, logTo, clearLog, flash, clearFlash, setLogCacheHooks,
+    extractJsonArray, uniq, normalizeRange, logTo, clearLog, flash, clearFlash, setLogCacheHooks,
 };

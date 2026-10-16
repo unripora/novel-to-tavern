@@ -79,7 +79,11 @@ export async function classifyEntries(entries, nodes, { signal, onLog } = {}) {
 
     const out = {
         general,
-        chapters: names.map((n) => ({ name: n, entries: chapterMap.get(n) })).filter((c) => c.entries.length),
+        chapters: names.map((n) => {
+            const node = chapters.find((x) => x.name === n) || {};
+            // 篇章本附带原文范围（世界书「自带范围」），供「角色 & 世界」按对应原文生成角色条目
+            return { name: n, entries: chapterMap.get(n), range: { start: node.start, end: node.end } };
+        }).filter((c) => c.entries.length),
     };
     log('归类完成：通用本 ' + out.general.length + ' 条，篇章本 ' + out.chapters.length + ' 本', 'g');
     return out;

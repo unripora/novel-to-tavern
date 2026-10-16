@@ -12,7 +12,7 @@ import { getNovel } from './novel.js';
 import { settings } from './store.js';
 import { sampleForStyle, getCharacters } from './scan.js';
 import { generate, isAbort } from './generate.js';
-import { stripFence, stripThink, extractJsonArray, logTo, uniq } from './util.js';
+import { stripFence, stripThink, extractJsonArray, logTo, uniq, normalizeRange } from './util.js';
 
 /** 世界书条目格式说明（迁移自 prompts.js） */
 import { WB_FMT as _WB_FMT } from './prompts.js';
@@ -320,6 +320,33 @@ export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, max
 }
 
 /**
+ * 在指定正文范围内抽样（沿用「等距分段」策略，受总上限约束）。
+ * 用于「角色 & 世界」按目标世界书自带范围生成角色条目。
+ * @param {number} start 起始字符位置
+ * @param {number} end 结束字符位置
+ * @param {number} [perChunk] 每段字符数
+ * @param {number} [slices] 采样段数
+ * @param {number} [cap] 总字符上限
+ * @returns {string}
+ */
+function sampleRange(start, end, perChunk = 8000, slices = 6, cap = 52000) {
+    const text = getNovel();
+    if (!text) return '';
+    const s = Math.max(0, Math.min(Number(start) || 0, text.length));
+    const e = Math.max(s, Math.min(Number(end) || text.length, text.length));
+    const seg = text.slice(s, e);
+    if (!seg) return '';
+    if (seg.length <= cap) return seg;
+    const out = [];
+    const step = Math.floor(seg.length / slices);
+    for (let i = 0; i < slices; i++) {
+        const st = Math.floor(i * step);
+        out.push(seg.slice(st, st + perChunk));
+    }
+    return out.join('\n\n…\n\n').slice(0, cap);
+}
+
+/**
  * 【角色 & 世界专用】为指定的**任意角色**逐个生成世界书条目（绿灯）。
  *
  * 与 wbMinorCore 的区别：
@@ -332,13 +359,22 @@ export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, max
  * @param {'none'|'light'|'heavy'} [o.relatedMode='none'] 关联人物强度（light/heavy 均产出 related/relatedKeys）
  * @param {AbortSignal} [o.signal]
  * @param {boolean} [o.nsfw]
+ * @param {{start:number,end:number}} [o.range] 原文范围（由「原文范围」下拉指定）；给了则只在该段原文内生成（未给回退全书抽样）
  * @param {(cur:number,total:number,name:string)=>void} [o.onProgress]
  * @returns {Promise<Array>} 条目数组
  */
-export async function genCharEntries({ names = [], relatedMode = 'none', signal, nsfw = false, onProgress } = {}) {
+export async function genCharEntries({ names = [], relatedMode = 'none', signal, nsfw = false, onProgress, range } = {}) {
     const list = (names || []).map((n) => String(n).trim()).filter(Boolean);
     if (!list.length) { logTo('ce_wc_log', '角色条目：未选择角色', 'e'); return []; }
-    const sample = sampleForStyle(getNovel().trim());
+    const rg = normalizeRange(range);
+    let sample = '';
+    if (rg) {
+        sample = sampleRange(rg.start, rg.end);
+        logTo('ce_wc_log', `角色条目：按原文范围（${rg.start}~${rg.end}）取原文 ${sample.length} 字`, 'g');
+    } else {
+        sample = sampleForStyle(getNovel().trim());
+        logTo('ce_wc_log', '角色条目：未限定范围，改用全书抽样', 'g');
+    }
     const wantRelated = relatedMode === 'light' || relatedMode === 'heavy';
     const out = [];
     for (let i = 0; i < list.length; i++) {
