@@ -14,6 +14,9 @@ import { popupForm } from './st-bridge.js';
 import { $, state, escapeHtml, stopRun, saveProducts } from './ui-context.js';
 
 export function renderCardTab(box) {
+    // 渲染前先清洗选中项：换过小说 / 删过角色后，selectedNames 里可能残留已不存在的名字，
+    // 不清掉的话「已选角色」会显示一长串早就没有的角色。
+    pruneSelected();
     const tpls = state.templates.map((t, i) =>
         `<option value="${i}" ${i === state.curTpl ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('');
     box.innerHTML = `
@@ -204,11 +207,27 @@ function bindCharsArea() {
     $('ce_scan').addEventListener('click', runScan);
 }
 
+/**
+ * 清洗选中项：只保留当前角色列表里仍然存在的名字。
+ * 角色被删除、合并、或换过小说后，旧名字不能留在 selectedNames 里。
+ * @returns {boolean} 是否发生了删减
+ */
+function pruneSelected() {
+    const existing = new Set(scan.getCharacters().map((c) => c.name));
+    const kept = state.selectedNames.filter((n) => existing.has(n));
+    if (kept.length === state.selectedNames.length) return false;
+    state.selectedNames = kept;
+    // 顺带清掉 settings 里的残留，避免刷新后又冒出来
+    settings().selectedNames = kept;
+    persist();
+    return true;
+}
+
 /** 渲染角色圆角矩形（选中/未选中），选中即用于生成 */
 function renderCharChips() {
     const box = $('ce_charlist');
-    settings().selectedNames = state.selectedNames;
-    persist();
+    pruneSelected();
+    syncSelectedLabel();
     if (!box) return;
     const chars = scan.getCharacters();
     box.innerHTML = '';
@@ -233,6 +252,13 @@ function renderCharChips() {
         });
         box.appendChild(d);
     });
+}
+
+/** 刷新「已选角色」文字，与 state.selectedNames 保持一致 */
+function syncSelectedLabel() {
+    const el = $('ce_sel_names');
+    if (!el) return;
+    el.textContent = state.selectedNames.join('、') || '（无，请在上方角色区点击选择）';
 }
 
 async function runScan() {
