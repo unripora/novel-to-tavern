@@ -19,6 +19,14 @@ export function getCharacters() {
     return characters;
 }
 
+/**
+ * 丢弃内存缓存，下次 getCharacters 重新从 settings 读。
+ * 切换小说时必须调用：否则缓存的仍是上一本的角色列表。
+ */
+export function invalidateCharacters() {
+    characters = null;
+}
+
 export function setCharacters(list) {
     characters = Array.isArray(list) ? list : [];
     settings().characters = characters;
@@ -103,6 +111,6 @@ export function novelSampleOrEmpty() {
 }
 
 export default {
-    getCharacters, setCharacters, clearCharacters, charNames,
+    getCharacters, setCharacters, clearCharacters, invalidateCharacters, charNames,
     collectContext, sampleForStyle, novelSampleOrEmpty,
 };

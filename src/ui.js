@@ -8,7 +8,8 @@
 import { settings, persist } from './store.js';
 import { BUILTINS, ENSEMBLE_TPL, ENSEMBLE_TPL_NAME } from './prompts.js';
 import { setLogCacheHooks } from './util.js';
-import { state, $, setRerender, setStopRun, restoreProducts, mountLogs, cacheLog, clearCachedLog } from './ui-context.js';
+import { state, $, setRerender, setStopRun, restoreProducts, mountLogs, cacheLog, clearCachedLog, saveProducts } from './ui-context.js';
+import { getCurrentRecord, restoreLastNovel } from './novel.js';
 import { renderNovelTab } from './ui-novel.js';
 import { renderCardTab } from './ui-card.js';
 import { renderTimelineTab } from './ui-timeline.js';
@@ -111,7 +112,16 @@ export function mountUI() {
         // 注入日志缓存钩子：logTo/clearLog 自动同步到 state.logs
         setLogCacheHooks(cacheLog, clearCachedLog);
         // 恢复上次生成的产物（角色卡/人设/世界书等，刷新不丢）
-        restoreProducts().then(() => {
+        restoreProducts().then(async () => {
+            // 产物恢复后，再按「当前小说」载入它自己的分区：
+            // 小说切换时中间产物各存一份，冷启动必须先还原分区快照，
+            // 否则会把别的书残留的全局产物当成这本的（角色卡/篇章划分串书）。
+            try {
+                if (getCurrentRecord()) {
+                    await restoreLastNovel(state);
+                    saveProducts();
+                }
+            } catch (e) { /* 恢复失败不阻断面板 */ }
             // 恢复完成后若当前在相应 Tab，重渲染以显示产物
             const active = tabs.querySelector('.ce-tab.active');
             if (active) renderTab(active.dataset.tab);

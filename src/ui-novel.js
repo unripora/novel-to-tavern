@@ -107,23 +107,23 @@ export function renderNovelTab(box) {
     $('ce_novel_save').addEventListener('click', async () => {
         const name = prompt('小说名称：', '小说' + new Date().toLocaleDateString());
         if (!name) return;
-        await novel.saveNovelRecord(name.trim());
+        await novel.saveNovelRecord(name.trim(), state);
         flash('ce_novel_msg', '已保存：' + name.trim());
         refreshNovelList();
     });
     $('ce_novel_load').addEventListener('click', async () => {
         const name = $('ce_novel_sel').value;
         if (!name) return;
-        const text = await novel.loadNovelRecord(name);
-        ta.value = novel.previewOf(text);
+        const { scope } = await novel.loadNovelRecord(name, state);
+        ta.value = novel.previewOf(novel.getNovel());
         updateNovelStat();
-        flash('ce_novel_msg', '已载入：' + name);
+        flash('ce_novel_msg', '已载入：' + name + scopeMessage(scope));
     });
     $('ce_novel_del').addEventListener('click', async () => {
         const name = $('ce_novel_sel').value;
         if (!name) return;
-        if (!confirm('确认删除记录「' + name + '」？')) return;
-        await novel.deleteNovelRecord(name);
+        if (!confirm('确认删除记录「' + name + '」及其角色/时间线等中间产物？')) return;
+        await novel.deleteNovelRecord(name, state);
         refreshNovelList();
         flash('ce_novel_msg', '已删除');
     });
@@ -163,20 +163,27 @@ async function importFile(f) {
     try {
         flash('ce_novel_msg', '读取中…');
         $('ce_load_prog').style.display = 'block';
-        const { text, enc, record } = await novel.readNovelFile(f, (pct, label) => {
+        const { text, enc, record, scope } = await novel.readNovelFile(f, (pct, label) => {
             $('ce_load_bar').style.width = pct + '%';
             const el = $('ce_novel_msg');
             if (el) el.textContent = label || '';
-        });
+        }, state);
         $('ce_novel_text').value = novel.previewOf(text);
         updateNovelStat();
         $('ce_load_prog').style.display = 'none';
-        flash('ce_novel_msg', '已导入（编码 ' + enc + '），已自动存为记录「' + record + '」');
+        flash('ce_novel_msg', '已导入（编码 ' + enc + '），已自动存为记录「' + record + '」' + scopeMessage(scope));
         refreshNovelList(record);
     } catch (e) {
         $('ce_load_prog').style.display = 'none';
         flash('ce_novel_msg', '读取失败：' + e.message, true);
     }
+}
+
+/** 切换小说后的提示：新建 / 恢复了几项中间产物 */
+function scopeMessage(scope) {
+    if (!scope) return '';
+    if (scope.restored) return '；已恢复该小说的角色 ' + scope.characters + ' 个、篇章 ' + scope.nodes + ' 个';
+    return '；已清空上一本的角色与篇章划分';
 }
 
 function updateNovelStat() {

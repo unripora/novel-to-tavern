@@ -7,6 +7,7 @@
 
 import { novelStore, settings, persist, serverMaybeDel } from './store.js';
 import * as persistMod from './persist.js';
+import { switchNovelScope, dropNovelScope } from './novel-scope.js';
 
 const READ_CHUNK = 4 * 1024 * 1024;   // 每次读取 4MB
 const PREVIEW_LIMIT = 200000;          // 预览截断长度
@@ -23,9 +24,27 @@ export function getCurrentRecord() {
     return settings().curNovel || '';
 }
 
-function setCurrentRecord(name) {
-    settings().curNovel = name || '';
+/**
+ * 切换当前记录名，并同步切换「中间产物分区」。
+ *
+ * 这是换小说的唯一入口：角色列表、时间线、角色卡等产物都按记录名各存一份，
+ * 切到新小说时旧产物不会残留；切回旧小说时自动恢复。
+ *
+ * @param {string} name 目标记录名
+ * @param {object} [state] ui-context 的 state（用于读写面板产物）
+ * @returns {Promise<{restored:boolean, characters:number, nodes:number}|null>}
+ */
+async function setCurrentRecord(name, state) {
+    const prev = getCurrentRecord();
+    const next = name || '';
+    settings().curNovel = next;
     persist();
+    if (prev === next) return null;
+    const res = state ? await switchNovelScope({ prev, next, state }) : null;
+    // scan 的角色列表有内存缓存，切换后必须失效，否则仍返回上一本的角色。
+    // 用动态 import 打破 novel.js ↔ scan.js 的循环依赖。
+    try { (await import('./scan.js')).invalidateCharacters(); } catch (e) { /* 忽略 */ }
+    return res;
 }
 
 export function previewOf(text) {
@@ -68,9 +87,10 @@ async function pickDecoder(f) {
  * 分片读取文件并增量解码
  * @param {File} f
  * @param {(pct:number, text:string)=>void} onProgress
- * @returns {Promise<{text:string, enc:string}>}
+ * @param {object} [state] ui-context 的 state（切换分区用）
+ * @returns {Promise<{text:string, enc:string, record:string, scope:object|null}>}
  */
-export async function readNovelFile(f, onProgress) {
+export async function readNovelFile(f, onProgress, state) {
     const total = f.size;
     if (!total) return { text: '', enc: 'utf-8' };
 
@@ -96,43 +116,61 @@ export async function readNovelFile(f, onProgress) {
     setNovel(text);
     // 导入即自动落盘：用文件名（去扩展名）作为记录名，刷新后可自动恢复
     const recName = (f.name || '').replace(/\.[^.]+$/, '').trim() || ('导入_' + Date.now());
-    try { await saveNovelRecord(recName); } catch (e) { /* 存储不可用时不阻断导入 */ }
-    return { text, enc: dec, record: recName };
+    let scope = null;
+    try { scope = (await saveNovelRecord(recName, state)).scope; } catch (e) { /* 存储不可用时不阻断导入 */ }
+    return { text, enc: dec, record: recName, scope };
 }
 
-/** 启动时恢复上次使用的正文（若存在） */
-export async function restoreLastNovel() {
+/**
+ * 启动时恢复上次使用的正文（若存在）。
+ * 传了 state 时，顺带载入该小说的中间产物分区（角色 / 时间线 / 角色卡）。
+ * 冷启动不传 state，只还原正文，避免在面板未挂载时动分区。
+ */
+export async function restoreLastNovel(state) {
     const name = getCurrentRecord();
     if (!name) return '';
     try {
         const text = await novelStore.load(name);
         if (text) setNovel(text);
+        if (state) {
+            // 冷启动时 prev 为空：不会把空白状态覆盖写回，只做「载入」
+            await switchNovelScope({ prev: '', next: name, state });
+        }
         return text;
     } catch (e) { return ''; }
 }
 
-/** 保存当前正文到记录 */
-export async function saveNovelRecord(name) {
+/**
+ * 保存当前正文到记录。
+ * @param {string} name 记录名
+ * @param {object} [state] ui-context 的 state（切换分区用）
+ */
+export async function saveNovelRecord(name, state) {
     if (!name) throw new Error('请填写小说名称');
     await novelStore.save(name, novelText);
-    setCurrentRecord(name);
+    const scope = await setCurrentRecord(name, state);
     // 开关开启时同步落盘服务器工作区（<记录名>/novel.txt），失败静默跳过
     persistMod.saveNovelText(name, novelText, name).catch(() => { });
-    return name;
+    return { name, scope };
 }
 
-/** 载入指定记录 */
-export async function loadNovelRecord(name) {
+/**
+ * 载入指定记录。
+ * @param {string} name 记录名
+ * @param {object} [state] ui-context 的 state（恢复该小说的角色/时间线/产物）
+ */
+export async function loadNovelRecord(name, state) {
     const text = await novelStore.load(name);
     setNovel(text);
-    setCurrentRecord(name);
-    return text;
+    const scope = await setCurrentRecord(name, state);
+    return { text, scope };
 }
 
-/** 删除记录（若删的是当前记录，清空当前记录名） */
-export async function deleteNovelRecord(name) {
+/** 删除记录（若删的是当前记录，清空当前记录名；连带删除该小说的中间产物分区） */
+export async function deleteNovelRecord(name, state) {
     await novelStore.del(name);
-    if (getCurrentRecord() === name) setCurrentRecord('');
+    if (getCurrentRecord() === name) await setCurrentRecord('', state);
+    await dropNovelScope(name);
     // 同步删除服务器工作区下的正文（开关关闭 / 插件不可用时内部静默跳过）
     serverMaybeDel(persistMod.wsPath(name, 'novel.txt')).catch(() => { });
 }

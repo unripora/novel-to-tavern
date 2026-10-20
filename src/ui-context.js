@@ -6,7 +6,8 @@
  */
 
 import { flash } from './util.js';
-import { panelStore, serverMaybeSave } from './store.js';
+import { panelStore, serverMaybeSave, settings } from './store.js';
+import { SCOPED_PRODUCT_KEYS } from './novel-scope.js';
 
 /** 面板级状态 */
 export const state = {
@@ -42,12 +43,29 @@ export function saveProducts() {
     const data = {};
     for (const k of PRODUCT_KEYS) data[k] = state[k];
     panelStore.save('products', data).catch(() => { });
+    // 同步写当前小说的分区，冷启动按分区恢复时能拿到最新的产物
+    syncScopeProducts(data).catch(() => { });
     // 服务器落盘（防抖 1.5s；未开开关 / 未装插件时内部静默跳过）
     if (_srvSaveTimer) clearTimeout(_srvSaveTimer);
     _srvSaveTimer = setTimeout(() => {
         _srvSaveTimer = null;
         serverMaybeSave('_state/products.json', JSON.stringify(data, null, 2)).catch(() => { });
     }, 1500);
+}
+
+/**
+ * 把产物同步到「当前小说」的分区（只更新产物部分，保留角色/时间线等已有快照）。
+ * 避免 panel:products 这份全局值被别的书的产物污染。
+ */
+async function syncScopeProducts(data) {
+    const rec = settings().curNovel;
+    if (!rec) return;
+    const key = 'scope:' + rec;
+    const snap = (await panelStore.load(key)) || {};
+    snap.products = {};
+    for (const k of SCOPED_PRODUCT_KEYS) snap.products[k] = data[k];
+    snap.savedAt = Date.now();
+    await panelStore.save(key, snap);
 }
 
 /** 保存日志缓存（防抖，刷新后回显 AI 调用日志） */
