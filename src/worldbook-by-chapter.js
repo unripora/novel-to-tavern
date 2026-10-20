@@ -6,15 +6,16 @@
  *   - 按篇章生成：把整本生成里的各个任务，改为「在该篇章正文范围内」逐篇执行，
  *     每篇章各得一本；总本 = 全局世界观 + 角色总表 + 剧情大纲（3 条常驻）。
  *
- * 复用 worldbook.js 的任务内核（提取条目 / 共享背景 / 配角群像 / 剧情分段 / 人物列表 / 剧情大纲）：
+ * 复用 worldbook.js 的任务内核（提取条目 / 共享背景 / 配角群像 / 剧情分段 / 角色条目 / 剧情大纲）：
  * 范围敏感的任务（提取条目 / 剧情分段）在本文件内按篇章范围重写；其余直接在整本内核上执行。
  */
 
 import { settings } from './store.js';
 import { generate } from './generate.js';
 import {
-    wbBgCore, wbMinorCore, wbConstantEntry,
+    wbBgCore, wbMinorCore, wbConstantEntry, genCharEntries,
 } from './worldbook.js';
+import { getCharacters } from './scan.js';
 import { stripFence, stripThink, logTo } from './util.js';
 
 /** 取某篇章节点的正文位置范围 */
@@ -216,11 +217,15 @@ async function tasksInRange(seg, node, opt, { signal, logEl }) {
         if (one) out.push({ ...one, title: label + '·背景大纲' });
     }
 
-    // ⑤ 人物列表（复用整本内核：基于全书取样；条目标题按篇章加前缀）
+    // ⑤ 角色条目（详细）：为角色逐个写绿灯条目，条目正文用单人卡档案模板逐字段填写
     if (opt.chars) {
-        logTo(logEl, `「${label}」▶ 人物列表`);
-        const one = await runOptional(() => wbConstantEntry({ signal, kind: 'chars' }), '人物列表', logEl);
-        if (one) out.push({ ...one, category: '人物', title: label + '·人物列表', constant: false, keys: one.keys || [] });
+        logTo(logEl, `「${label}」▶ 角色条目（详细）`);
+        const list = await runOptional(() => genCharEntries({
+            names: getCharacters().map((c) => c.name),
+            relatedMode: opt.relatedMode || 'none',
+            signal, range: { start: node.start, end: node.end },
+        }), '角色条目', logEl);
+        out.push(...(list || []));
     }
 
     // ⑥ 剧情大纲（复用整本内核：基于全书取样；条目标题按篇章加前缀）

@@ -10,6 +10,7 @@
 import { toast, flash, logTo, clearLog } from './util.js';
 import { settings, persist } from './store.js';
 import * as novel from './novel.js';
+import * as scan from './scan.js';
 import * as worldbook from './worldbook.js';
 import * as wbByChapter from './worldbook-by-chapter.js';
 import * as timeline from './timeline.js';
@@ -50,15 +51,19 @@ export function renderWorldTab(box) {
                     <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_bg"> 共享背景</label>
                     <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_minor"> 配角群像</label>
                     <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_plot"> 剧情分段</label>
-                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_chars"> 人物列表</label>
+                    <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_chars"> 角色条目（详细）</label>
                     <label class="checkbox_label"><input type="checkbox" id="ce_wb_t_plotlist"> 剧情大纲</label>
                 </div>
+                <p class="ce-faint">
+                    「角色条目（详细）」＝为角色清单里的每个角色单独写一条绿灯条目，按单人卡档案模板逐字段填写
+                    （生平、关系、口癖等），比「配角群像」的一两句概述详细得多，AI 会据此演而不是念标签。
+                </p>
                 <p class="ce-faint" id="ce_wb_opt_tip"></p>
                 <div id="ce_wb_vol_area" style="display:none">
                     <p class="ce-faint">
                         总本 = 全局世界观 + 角色总表 + 剧情大纲（必定生成，可取消跳过）；
                         各卷按上面勾选的任务生成：「提取条目」「剧情分段」限定在该卷正文范围内，
-                        其余（共享背景 / 配角群像 / 人物列表 / 剧情大纲）为全书范围。
+                        其余（共享背景 / 配角群像 / 角色条目 / 剧情大纲）为全书范围。
                         每卷完成即独立落盘为 <code>&lt;记录名&gt;/worldbook/&lt;卷名&gt;.json</code>，可单独导入酒馆。
                         「已生成」以落盘文件是否存在为准。
                     </p>
@@ -176,7 +181,7 @@ function bindWorldModeUI(nodes) {
         persist();
         if (m === 'chapter') {
             hint.textContent = nodes.length ? `（已建立 ${nodes.length} 个卷）` : '（尚未建立时间线，请去「时间线」页划分）';
-            tip.textContent = '按卷生成：总本 = 全局世界观 + 角色总表 + 剧情大纲；各卷中「提取条目」「剧情分段」限定在该卷正文范围内，其余任务为全书范围。';
+            tip.textContent = '按卷生成：总本 = 全局世界观 + 角色总表 + 剧情大纲；各卷中「提取条目」「剧情分段」「角色条目」限定在该卷正文范围内，其余任务为全书范围。';
             volArea.style.display = 'block';
             // 按篇章的结果本就是多本：有多本分组则进多本形态
             showWbMode(state.wbGroups ? 'multi' : 'single');
@@ -557,7 +562,7 @@ async function runWorldbook() {
             onSegment: (s) => persistMod.saveProgress('plot', s, novelName),
         }))]);
     }
-    if ($('ce_wb_t_chars').checked) tasks.push(['人物列表', () => worldbook.wbConstantEntry({ kind: 'chars' })]);
+    if ($('ce_wb_t_chars').checked) tasks.push(['角色条目（详细）', () => worldbook.genCharEntries({ names: scan.getCharacters().map((c) => c.name), relatedMode })]);
     if ($('ce_wb_t_plotlist').checked) tasks.push(['剧情大纲', () => worldbook.wbConstantEntry({ kind: 'plot' })]);
     if (relatedMode === 'heavy') tasks.push(['关系图谱', () => runRelationExtract(novelName)]);
     if (!tasks.length) { flash('ce_wb_msg', '请先勾选要生成的内容', true); return; }

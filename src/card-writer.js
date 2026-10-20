@@ -207,7 +207,7 @@ export function toCharacterBookEntries(entries) {
             enabled: true,
             constant: !!e.constant,
             selective: !e.constant,
-            insertion_order: 100,
+            insertion_order: Number.isFinite(Number(e.order)) ? Number(e.order) : 100,
             position: 'before_char',
             case_sensitive: false,
             priority: 10,

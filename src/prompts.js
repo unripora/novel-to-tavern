@@ -257,6 +257,13 @@ export const BUILTINS = [
 export const WB_FMT = '每个条目严格用如下格式：\n========== 序号. 标题　[分类] ==========\n触发关键词: 关键词1、关键词2\n推荐模式: 常驻（蓝灯）  或  关键词触发（绿灯）\n内容:\n（该条目的设定内容）\n\n（条目之间空一行）';
 
 /**
+ * 「详细角色条目」默认采用的档案模板 = 单人的事件导向模板。
+ * 世界书里的角色条目若用这份模板逐字段填写（而非三五句概述），
+ * AI 才会按具体事件、关系、口癖来演，而不是念标签。
+ */
+export const CHAR_ENTRY_TPL = EVENT_TPL;
+
+/**
  * 构建「数值面板」提示词块（追加到角色卡 / user 人设模板末尾）
  *
  * @param {Object} o
@@ -317,5 +324,5 @@ export function buildStageHeader(nodeName, summary = '') {
 
 export default {
     TEMPLATE, NSFW_BLOCK, EVENT_TPL, SLIM_TPL, NPC_TPL, BLANK_TPL,
-    DEFAULT_TPL, ENSEMBLE_TPL, ENSEMBLE_TPL_NAME, BUILTINS, WB_FMT, buildStatPanelBlock, buildStageHeader,
+    DEFAULT_TPL, ENSEMBLE_TPL, ENSEMBLE_TPL_NAME, BUILTINS, WB_FMT, CHAR_ENTRY_TPL, buildStatPanelBlock, buildStageHeader,
 };

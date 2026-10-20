@@ -10,12 +10,12 @@
 import { ctx } from './st-bridge.js';
 import { getNovel } from './novel.js';
 import { settings } from './store.js';
-import { sampleForStyle, getCharacters } from './scan.js';
+import { sampleForStyle, getCharacters, collectContext } from './scan.js';
 import { generate, isAbort } from './generate.js';
 import { stripFence, stripThink, extractJsonArray, logTo, uniq, normalizeRange } from './util.js';
 
 /** 世界书条目格式说明（迁移自 prompts.js） */
-import { WB_FMT as _WB_FMT } from './prompts.js';
+import { WB_FMT as _WB_FMT, CHAR_ENTRY_TPL } from './prompts.js';
 export { WB_FMT } from './prompts.js';
 const WB_FMT = _WB_FMT;
 
@@ -357,23 +357,33 @@ function sampleRange(start, end, perChunk = 8000, slices = 6, cap = 52000) {
  * @param {object} o
  * @param {string[]} o.names 角色名数组（必填）
  * @param {'none'|'light'|'heavy'} [o.relatedMode='none'] 关联人物强度（light/heavy 均产出 related/relatedKeys）
+ * @param {'brief'|'detail'} [o.detail='detail'] 条目详略：
+ *        brief＝三五句概述（旧行为）；detail＝按角色卡档案模板逐字段填写（含生平、关系、口癖等，条目很长）
+ * @param {string} [o.tmpl] 详细条目所用的档案模板（默认 prompts.CHAR_ENTRY_TPL）
+ * @param {boolean} [o.fullCtx] 详细模式下是否使用该角色的全文相关段落（默认按上限采样）
  * @param {AbortSignal} [o.signal]
  * @param {boolean} [o.nsfw]
  * @param {{start:number,end:number}} [o.range] 原文范围（由「原文范围」下拉指定）；给了则只在该段原文内生成（未给回退全书抽样）
  * @param {(cur:number,total:number,name:string)=>void} [o.onProgress]
  * @returns {Promise<Array>} 条目数组
  */
-export async function genCharEntries({ names = [], relatedMode = 'none', signal, nsfw = false, onProgress, range } = {}) {
+export async function genCharEntries({
+    names = [], relatedMode = 'none', detail = 'detail', tmpl = '', fullCtx = false, signal, nsfw = false, onProgress, range,
+} = {}) {
     const list = (names || []).map((n) => String(n).trim()).filter(Boolean);
     if (!list.length) { logTo('ce_wc_log', '角色条目：未选择角色', 'e'); return []; }
     const rg = normalizeRange(range);
+    const wantDetail = detail === 'detail';
+    const tpl = String(tmpl || CHAR_ENTRY_TPL).trim();
+    // 详细模式按角色名检索各自相关段落（与单人卡一致）；简要模式用全书抽样
     let sample = '';
     if (rg) {
         sample = sampleRange(rg.start, rg.end);
         logTo('ce_wc_log', `角色条目：按原文范围（${rg.start}~${rg.end}）取原文 ${sample.length} 字`, 'g');
-    } else {
+    }
+    if (!sample) {
         sample = sampleForStyle(getNovel().trim());
-        logTo('ce_wc_log', '角色条目：未限定范围，改用全书抽样', 'g');
+        if (!rg) logTo('ce_wc_log', wantDetail ? '角色条目：未限定范围，详细模式改用各角色的相关段落' : '角色条目：未限定范围，改用全书抽样', 'g');
     }
     const wantRelated = relatedMode === 'light' || relatedMode === 'heavy';
     const out = [];
@@ -382,23 +392,17 @@ export async function genCharEntries({ names = [], relatedMode = 'none', signal,
         const nm = list[i];
         if (onProgress) onProgress(i, list.length, nm);
         if (i > 0) await sleep(300);
-        const prompt =
-            '下面是小说节选。请为角色「' + nm + '」写**一条世界书条目**（用于多人卡：让 AI 知道 TA 是谁、何时该登场）。\n' +
-            '要求：写清身份、性格、与主角及他人的关系、重要经历；依据原文、简洁准确、不编造。\n' +
-            'keys：该角色会被提到的名称/别名/称呼，2~5 个。\n' +
-            (wantRelated
-                ? 'related：与该角色紧密相关的**事件/地点/势力**名称，2~5 个（用于判断剧情何时该让 TA 登场）。\n' +
-                  'relatedKeys：从 related 里提炼出的**登场触发词**（读者/旁白会提到的词），2~6 个。\n'
-                : '') +
-            (nsfw ? '可包含成人向设定，同样只依据原文。\n' : '不要涉及成人 / 性相关内容。\n') +
-            '输出 JSON 对象（不要数组、不要代码块、不要解释）：\n' +
-            '{"title":"' + nm + '","keys":[],' + (wantRelated ? '"related":[],"relatedKeys":[],' : '') + '"content":"该角色的世界书条目正文"}\n\n' +
-            '=== 小说节选 ===\n' + sample;
+        // 详细模式：每个角色单独取与其相关的段落（限定范围时在该范围内检索）
+        const ctx = (wantDetail && !rg) ? (collectContext(nm, [], !!fullCtx) || sample) : sample;
+        const prompt = wantDetail
+            ? charEntryDetailPrompt(nm, tpl, ctx, { wantRelated, nsfw })
+            : charEntryBriefPrompt(nm, ctx, { wantRelated, nsfw });
         let raw = '';
         try {
             raw = await generate(userMsgs(prompt), {
                 signal, useStream: !!settings().useStream,
-                maxCont: settings().autoCont ? 3 : 0, logEl: 'ce_wc_log', label: '角色条目·' + nm,
+                maxCont: settings().autoCont ? (wantDetail ? 5 : 3) : 0,
+                logEl: 'ce_wc_log', label: '角色条目·' + nm,
             });
         } catch (err) {
             if (isAbort(err, signal)) break;
@@ -411,14 +415,55 @@ export async function genCharEntries({ names = [], relatedMode = 'none', signal,
         const keys = Array.isArray(obj.keys) ? obj.keys.map((k) => String(k).trim()).filter(Boolean) : [];
         if (!keys.includes(nm)) keys.unshift(nm);
         const entry = { category: '人物', title, keys, content: String(obj.content || '').trim(), constant: false, enterSticky: 3 };
+        if (wantDetail) entry.detail = true;
         if (wantRelated) {
             entry.related = Array.isArray(obj.related) ? obj.related.map((s) => String(s).trim()).filter(Boolean) : [];
             entry.relatedKeys = Array.isArray(obj.relatedKeys) ? obj.relatedKeys.map((s) => String(s).trim()).filter(Boolean) : [];
         }
         out.push(entry);
-        logTo('ce_wc_log', '已生成角色条目：' + title, 'g');
+        logTo('ce_wc_log', `已生成角色条目：${title}（${entry.content.length} 字）`, 'g');
     }
     return out;
+}
+
+/** 简要角色条目提示词（旧行为：三五句概述） */
+function charEntryBriefPrompt(nm, sample, { wantRelated, nsfw }) {
+    return '下面是小说节选。请为角色「' + nm + '」写**一条世界书条目**（用于多人卡：让 AI 知道 TA 是谁、何时该登场）。\n' +
+        '要求：写清身份、性格、与主角及他人的关系、重要经历；依据原文、简洁准确、不编造。\n' +
+        'keys：该角色会被提到的名称/别名/称呼，2~5 个。\n' +
+        (wantRelated
+            ? 'related：与该角色紧密相关的**事件/地点/势力**名称，2~5 个（用于判断剧情何时该让 TA 登场）。\n' +
+              'relatedKeys：从 related 里提炼出的**登场触发词**（读者/旁白会提到的词），2~6 个。\n'
+            : '') +
+        (nsfw ? '可包含成人向设定，同样只依据原文。\n' : '不要涉及成人 / 性相关内容。\n') +
+        '输出 JSON 对象（不要数组、不要代码块、不要解释）：\n' +
+        '{"title":"' + nm + '","keys":[],' + (wantRelated ? '"related":[],"relatedKeys":[],' : '') + '"content":"该角色的世界书条目正文"}\n\n' +
+        '=== 小说节选 ===\n' + sample;
+}
+
+/**
+ * 详细角色条目提示词：沿用单人角色卡的档案模板逐字段填写，
+ * 让世界书条目里带上完整生平 / 关系 / 口癖，而不是标签式概述。
+ */
+function charEntryDetailPrompt(nm, tpl, ctx, { wantRelated, nsfw }) {
+    const nsfwRule = nsfw
+        ? '· 模板里的 NSFW_information 段落只依据原文填写，原文未涉及则填「（原文未提及）」，严禁编造。'
+        : '· 若模板含 NSFW_information 段落，请整段省略，且不要输出任何性相关内容。';
+    return '请为角色「' + nm + '」填写下面的档案模板，填好的内容将作为**一条世界书条目**的正文（多人卡全靠它认识 TA）。\n\n' +
+        '要求：\n' +
+        '· 【完整档案】按模板逐字段填写，字段一个都不要漏；不要退化成几句概述，也不要只写身份 + 性格标签。\n' +
+        '· 【经历要具体】背景 / 关键事件 / 转折点写清**何时、发生何事、对 TA 造成了什么影响**，覆盖原文全程。\n' +
+        '· 【关系要落到人】relationships 里写清对象、关系、羁绊或纠葛，别写「与众人关系良好」这类空话。\n' +
+        '· 【口癖可辨识】speech_style 写出语癖、惯用语、语气特点，让 AI 能照着演。\n' +
+        '· 【严禁张冠李戴】只写属于「' + nm + '」的经历与设定；【严禁 OOC】所有描写与原文一致。\n' +
+        '· 只依据原文，可合理推断但绝不编造；原文确实没有的字段填「（原文未提及）」。\n' +
+        nsfwRule + '\n\n' +
+        '模板：\n' + tpl + '\n\n' +
+        '输出 JSON 对象（不要代码块、不要解释）：\n' +
+        '{"title":"' + nm + '","keys":["该角色会被提到的名称/别名/称呼，2~5 个"],' +
+        (wantRelated ? '"related":["紧密相关的事件/地点/势力名，2~5 个"],"relatedKeys":["登场触发词，2~6 个"],' : '') +
+        '"content":"上面这份档案的完整正文（可保留模板的缩进与字段名，便于 AI 逐个字段读取）"}\n\n' +
+        '=== 小说文本（与「' + nm + '」相关）===\n' + ctx;
 }
 
 /** 容错：从模型返回里取出一个 JSON 对象 */
@@ -580,12 +625,78 @@ export async function wbConstantEntry({ signal, onText, kind = 'chars', maxToken
 /** uid：时间戳 + 随机数，避免与酒馆已有条目撞号 */
 function genUid() { return Date.now() + Math.floor(Math.random() * 100000); }
 
+/**
+ * 默认插入顺序（酒馆 order）。
+ * 总本 / 通用本 = 100；篇章本 = 200。酒馆把多本世界书的条目放在一起排序，
+ * order 越大越靠上下文末尾、对输出影响越强，故篇章本（当前卷状态）会盖过总本（基础设定）。
+ */
+export const DEFAULT_ORDER = 100;
+
+/** 由书名推断插入顺序：总本 / 通用本 → 100，其余（篇章本）→ 200 */
+export function orderForBook(bookName) {
+    const n = String(bookName || '').trim();
+    if (!n || n === '总本' || n === '通用' || /总本|通用/.test(n)) return DEFAULT_ORDER;
+    return 200;
+}
+
+/** 书名前缀（去掉文件里常见的书名号与「世界书」后缀）：《SAO》世界书 → SAO */
+export function bookPrefix(bookName) {
+    const n = String(bookName || '').trim()
+        .replace(/^[《【\[]+/, '')
+        .replace(/[》】\]]+$/, '')
+        .replace(/世界书$/, '')
+        .replace(/^[《【\[]+|[》】\]]+$/g, '')
+        .trim();
+    return n;
+}
+
+/**
+ * 给条目标题加书卷前缀：「亚丝娜」+《SAO篇》→「SAO篇·亚丝娜」。
+ * 为什么加：酒馆里同名条目不会去重、会一起注入，标题虽不参与触发，
+ * 但前缀能让人一眼分清这条来自哪本书，也便于手动删改。
+ * @param {string} title
+ * @param {string} prefix
+ * @returns {string}
+ */
+export function prefixTitle(title, prefix) {
+    const t = String(title || '').trim();
+    const p = String(prefix || '').trim();
+    if (!t || !p) return t;
+    if (t.startsWith(p + '·') || t.startsWith(p + '：') || t.startsWith(p + ' ')) return t;   // 已有前缀不重复加
+    return p + '·' + t;
+}
+
+/**
+ * 写入前按书卷加工条目（不改动传入对象）：
+ *  - 加标题前缀（decorate.prefix 非空时），并把原标题记到 _bareTitle
+ *    （覆盖写入时据此认出「上次的无前缀旧条目」，避免同名两份）
+ *  - 补插入顺序（entry.order 未显式指定时按书名推断）
+ * @param {Array} entries 内部条目
+ * @param {{prefix?:string, order?:number}} [decorate]
+ * @returns {Array}
+ */
+export function decorateEntries(entries, decorate = {}) {
+    const prefix = String(decorate.prefix || '').trim();
+    const order = Number(decorate.order);
+    if (!prefix && !Number.isFinite(order)) return (entries || []).slice();
+    return (entries || []).map((e) => {
+        const out = { ...e };
+        if (prefix) {
+            out._bareTitle = String(e.title || '').trim();   // 原标题，供覆盖写入识别旧条目
+            out.title = prefixTitle(e.title, prefix);
+        }
+        if (Number.isFinite(order)) out.order = order;
+        return out;
+    });
+}
+
 /** 把内部条目转换为酒馆 World Info 条目结构（保留 key/comment/content/constant 等核心字段） */
 export function toTavernEntry(e, userReplace = {}, idx = 0) {
     const rn = replaceNameOf(userReplace);
     // 登场触发词（relatedKeys）并入 key，实现「剧情命中关键词即登场」
     const extraKeys = Array.isArray(e.relatedKeys) ? e.relatedKeys : [];
     const key = uniq([...wbSubKeys(e.keys, rn), ...extraKeys]);
+    const order = Number(e.order);
     return {
         uid: genUid() + idx,
         key,
@@ -594,7 +705,7 @@ export function toTavernEntry(e, userReplace = {}, idx = 0) {
         content: wbSub(e.content, rn) || '',
         constant: !!e.constant,
         selective: true,
-        order: 100,
+        order: Number.isFinite(order) ? order : DEFAULT_ORDER,
         position: 0,             // 0 = 角色定义之前
         depth: 4,                // 与 buildWbJson 一致（论坛：插入 @ 深度 4）
         sticky: Number(e.enterSticky) > 0 ? Number(e.enterSticky) : 0,  // 出场后留场轮数（>0 生效）
@@ -609,9 +720,9 @@ export { writeWorldbookToTavern, listWorldbooks, boundWorldbookName, loadWorldbo
 export { classifyEntries, writeSplitWorldbooks } from './worldbook-split.js';
 
 export default {
-    WB_FMT,
+    WB_FMT, CHAR_ENTRY_TPL, DEFAULT_ORDER,
     wbSub, wbSubKeys, buildWbPreview, buildWbJson, parseWbPreview, syncWbFromPreview,
     wbExtractCore, wbBgCore, wbMinorCore, wbPlotCore, wbConstantEntry,
     genCharEntries, relExtractCore,
-    toTavernEntry,
+    orderForBook, bookPrefix, prefixTitle, decorateEntries, toTavernEntry,
 };

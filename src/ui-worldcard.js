@@ -16,7 +16,7 @@ import * as worldbook from './worldbook.js';
 import * as persistMod from './persist.js';
 import * as writer from './card-writer.js';
 import * as timeline from './timeline.js';
-import { bindPrimaryWorldbook, unbindPrimaryWorldbook, linkExtraWorldbook } from './st-bridge.js';
+import { bindPrimaryWorldbook, unbindPrimaryWorldbook, linkExtraWorldbook, popupForm } from './st-bridge.js';
 import { $, state, escapeHtml, escapeAttr } from './ui-context.js';
 
 /** 本 Tab 的局部选择状态（与角色卡 Tab 解耦） */
@@ -44,6 +44,11 @@ export function renderWorldCardTab(box) {
                     「原文范围」决定角色从此处检索原文：<b>全书</b>＝全书抽样；<b>选某卷</b>＝只在该卷正文范围内找（与目标世界书叫什么无关，改名也不受影响）。
                 </p>
                 <div class="ce-rowline">
+                    <label>条目详略</label>
+                    <select id="ce_wc_detail" class="text_pole">
+                        <option value="detail" selected>详细档案（推荐，逐字段填写）</option>
+                        <option value="brief">简要概述（三五句）</option>
+                    </select>
                     <label>关联人物强度</label>
                     <select id="ce_wc_related" class="text_pole">
                         <option value="none">不关联</option>
@@ -58,12 +63,19 @@ export function renderWorldCardTab(box) {
                     <button type="button" class="menu_button" id="ce_wc_load">刷新列表</button>
                 </div>
                 <div class="ce-rowline">
+                    <label class="checkbox_label" title="多本世界书同名条目会一起注入；加前缀后一眼能分清来自哪本">
+                        <input type="checkbox" id="ce_wc_prefix" checked> 标题加书卷前缀（如「SAO篇·亚丝娜」）
+                    </label>
+                    <span class="ce-faint">写入时自动加，总本=100 / 篇章本=200 插入顺序</span>
+                </div>
+                <div class="ce-rowline">
                     <label>原文范围</label>
                     <select id="ce_wc_range" class="text_pole" style="flex:1"><option value="">全书</option></select>
                     <label>冲突策略</label>
                     <select id="ce_wc_conflict" class="text_pole">
-                        <option value="append" selected>追加（保留已有）</option>
+                        <option value="append">追加（保留已有）</option>
                         <option value="skip">跳过重复</option>
+                        <option value="overwrite" selected>覆盖（替换同名旧条目）</option>
                     </select>
                 </div>
                 <div class="ce-rowline">
@@ -185,6 +197,7 @@ async function runGenCharEntries() {
     clearLog('ce_wc_log');
 
     const related = $('ce_wc_related')?.value || 'light';
+    const detail = $('ce_wc_detail')?.value || 'detail';
     const nsfw = !!$('ce_wc_nsfw')?.checked;
     const target = $('ce_wc_target')?.value || '';
     const rangeVal = $('ce_wc_range')?.value || '';
@@ -193,10 +206,12 @@ async function runGenCharEntries() {
         wc.lastRange = resolveRangeByNodeId(rangeVal);
         if (wc.lastRange) logTo('ce_wc_log', `原文范围：卷「${wc.lastRange.name}」${wc.lastRange.start}~${wc.lastRange.end}，将只在该段正文内检索角色。`, 'g');
         else logTo('ce_wc_log', '原文范围：全书（未指定卷，按全书抽样）。', 'g');
+        if (detail === 'detail') logTo('ce_wc_log', '条目详略：详细档案（按单人卡模板逐字段填写，条目较长）。', 'g');
         flash('ce_wc_msg', '生成角色条目…', false, { persist: true });
         const entries = await worldbook.genCharEntries({
             names: wc.selected.slice(),
             relatedMode: related,
+            detail,
             nsfw, signal,
             range: wc.lastRange ? { start: wc.lastRange.start, end: wc.lastRange.end } : null,
             onProgress: (i, total, nm) => { flash('ce_wc_msg', `生成角色条目 ${i + 1}/${total} · ${nm}…`, false, { persist: true }); },
@@ -223,16 +238,44 @@ async function runGenCharEntries() {
 
 /**
  * 「写入目标世界书」：
- *  - 甲：本地（工作区）若有同名卷 → **就写本地那本**，同时**也写酒馆同名书**（两者都写）。
- *  - 无同名 → 新建本地卷，并（若酒馆可写）新建/合并到酒馆同名书。
- *  - 冲突策略：append＝保留已有全部；skip＝跳过与已有条目标题/关键词重复的新条目。
+ *  - 本地（工作区）若有同名卷 → 写本地那本，同时也写酒馆同名书（两者都写）。
+ *  - 冲突策略：
+ *      append    追加，保留已有全部
+ *      skip      跳过与已有条目标题重复的新条目
+ *      overwrite 覆盖：删掉目标书里同名旧条目，再写入新条目（默认）
+ *  - 覆盖/跳过会先 dry-run 统计，再弹窗确认后才真正落盘。
  */
 async function writeEntriesToTarget() {
     const entries = wc.lastEntries || [];
     if (!entries.length) { flash('ce_wc_msg', '请先生成角色条目', true); return; }
     const target = ($('ce_wc_target')?.value || '').trim();
-    const strategy = $('ce_wc_conflict')?.value || 'append';
+    const strategy = $('ce_wc_conflict')?.value || 'overwrite';
+    const usePrefix = !!$('ce_wc_prefix')?.checked;
     const rec = currentRec();
+    const prefix = usePrefix ? worldbook.bookPrefix(target) : '';
+    const order = worldbook.orderForBook(target);
+
+    // 0) 有目标书时先 dry-run，把「将删 / 将跳过」摆给用户确认（覆盖会永久删除酒馆条目）
+    if (target && strategy !== 'append') {
+        let plan = null;
+        try {
+            plan = await worldbook.writeWorldbookToTavern(target, entries, 'append', { strategy, prefix, order, dryRun: true });
+        } catch (e) { /* 预览失败则不拦，直接走写入 */ }
+        if (plan && plan.conflicts && plan.conflicts.length) {
+            const shown = plan.removedTitles.slice(0, 20);
+            const html =
+                '<p style="margin:0 0 8px">目标世界书「' + escapeHtml(target) + '」里有 <b>' + plan.conflicts.length + '</b> 条与新条目同名：</p>' +
+                '<div style="max-height:180px;overflow:auto;font-size:12px;line-height:1.7;margin-bottom:8px">' +
+                shown.map((t) => '· ' + escapeHtml(t)).join('<br>') +
+                (plan.removedTitles.length > shown.length ? '<br>…等共 ' + plan.removedTitles.length + ' 条' : '') +
+                '</div>' +
+                (strategy === 'overwrite'
+                    ? '<p style="margin:0">确认后<b>删除这些旧条目</b>，再写入 ' + entries.length + ' 条新条目。此操作不可撤销。</p>'
+                    : '<p style="margin:0">确认后<b>跳过</b>这些同名条目，只写入其余 ' + Math.max(0, entries.length - plan.conflicts.length) + ' 条。</p>');
+            const ok = await popupForm({ title: strategy === 'overwrite' ? '确认覆盖？' : '确认跳过？', bodyHtml: html, okLabel: '确认写入', cancelLabel: '取消' });
+            if (!ok) { flash('ce_wc_msg', '已取消写入'); logTo('ce_wc_log', '已取消写入。', 'e'); return; }
+        }
+    }
 
     // 1) 本地那份：若已有同名卷则合并进去，否则新建
     let localBook = null;
@@ -240,19 +283,22 @@ async function writeEntriesToTarget() {
     const baseEntries = (localBook && Array.isArray(localBook.entries)) ? localBook.entries : [];
     const mergedLocal = mergeEntries(baseEntries, entries, { strategy });
     const skippedLocal = mergedLocal.skipped || 0;
+    const removedLocal = mergedLocal.removed || 0;
     const bookName = target || '角色条目';
     try {
         await persistMod.saveChapterBook(rec, bookName, mergedLocal);
-        logTo('ce_wc_log', `已写入本地工作区「${bookName}」：${localBook ? '合并进已有卷' : '新建卷'}，共 ${mergedLocal.length} 条${skippedLocal ? `（跳过重复 ${skippedLocal} 条）` : ''}。`, 'g');
+        logTo('ce_wc_log', `已写入本地工作区「${bookName}」：${localBook ? '合并进已有卷' : '新建卷'}，共 ${mergedLocal.length} 条`
+            + (removedLocal ? `（覆盖 ${removedLocal} 条）` : '') + (skippedLocal ? `（跳过重复 ${skippedLocal} 条）` : '') + '。', 'g');
     } catch (e) {
         logTo('ce_wc_log', '本地落盘失败：' + e.message, 'e');
     }
 
-    // 2) 酒馆那份：有目标书就写酒馆同名（追加/跳过），无目标书则跳过
+    // 2) 酒馆那份：有目标书就按所选策略写酒馆同名，无目标书则跳过
     if (target) {
         try {
-            const r = await worldbook.writeWorldbookToTavern(target, entries, 'append', { strategy });
+            const r = await worldbook.writeWorldbookToTavern(target, entries, 'append', { strategy, prefix, order });
             logTo('ce_wc_log', r.message, r.ok ? 'g' : 'e');
+            if (prefix) logTo('ce_wc_log', '条目标题已加前缀「' + prefix + '·」，插入顺序 ' + order + '（总本 100 / 篇章本 200）。', 'g');
             flash('ce_wc_msg', r.ok ? `已写入「${target}」（本地＋酒馆）` : r.message, !r.ok);
         } catch (e) {
             logTo('ce_wc_log', '写入酒馆失败：' + e.message, 'e');
@@ -265,14 +311,22 @@ async function writeEntriesToTarget() {
     refreshBookLists();
 }
 
-/** 按标题合并条目（同标题合并关键词，内容取长）；opts.strategy='skip' 时跳过重复的新条目 */
+/**
+ * 按标题合并条目（同标题合并关键词，内容取长）。
+ * opts.strategy：
+ *  - 'append'（默认）同标题合并关键词，内容取长
+ *  - 'skip'    同标题的旧条目保留，新条目丢弃
+ *  - 'overwrite' 同标题的旧条目被新条目整条替换
+ */
 function mergeEntries(base, add, opts = {}) {
     const strategy = opts.strategy || 'append';
     const map = new Map((base || []).map((e) => [e.title, e]));
     let skipped = 0;
+    let removed = 0;
     for (const e of (add || [])) {
         if (map.has(e.title)) {
             if (strategy === 'skip') { skipped++; continue; }
+            if (strategy === 'overwrite') { map.set(e.title, e); removed++; continue; }
             const ex = map.get(e.title);
             for (const k of (e.keys || [])) if (!ex.keys.includes(k)) ex.keys.push(k);
             for (const k of (e.relatedKeys || [])) { ex.relatedKeys = ex.relatedKeys || []; if (!ex.relatedKeys.includes(k)) ex.relatedKeys.push(k); }
@@ -281,6 +335,7 @@ function mergeEntries(base, add, opts = {}) {
     }
     const arr = [...map.values()];
     arr.skipped = skipped;
+    arr.removed = removed;
     return arr;
 }
 
