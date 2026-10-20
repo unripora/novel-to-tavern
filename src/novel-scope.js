@@ -83,54 +83,74 @@ async function saveScope(rec, snap) {
 /**
  * 切换小说上下文。
  *
- * 两种情况必须区分开，否则会误清用户的数据：
- *  - 冷启动（prev 为空）：只做「载入」。新书没有快照时**不清空**，
- *    沿用 settings 里已有的角色/时间线 —— 那是升级前留下的数据，清了就丢。
- *  - 真正换书（prev 非空）：先把旧书存回分区，再载入新书；新书无快照才清空。
+ * 【安全规则 · 不可破坏】
+ * 冷启动（prev 为空）一律**只恢复、绝不清空**：不删除、不覆盖任何已有中间产物
+ * （角色列表 / 时间线 / 角色卡）。找不到快照就沿用 settings 里现有的数据。
+ * 原因：时间线是用户手工划出来的，误清一次就得重做，代价远高于「隔离得不够干净」。
+ *
+ * 只有**用户主动换书**（prev 非空）才允许清空：先把旧书状态存回它的分区，
+ * 再载入新书分区；新书确实没有快照，才清空运行态。
  *
  * @param {{prev?:string, next?:string, state:object}} o
- * @returns {Promise<{restored:boolean, characters:number, nodes:number}>}
+ * @returns {Promise<{restored:boolean, keptExisting:boolean, characters:number, nodes:number}>}
  */
 export async function switchNovelScope({ prev = '', next = '', state }) {
-    const coldStart = !prev;
-
-    // 1) 换书时，把旧小说当前的中间产物存回它的分区
-    if (prev) {
-        await saveScope(prev, {
-            settings: snapshotSettings(),
-            products: snapshotProducts(state),
-            savedAt: Date.now(),
-        });
+    // —— 冷启动：只恢复，绝不写空 ——
+    if (!prev) {
+        const snap = next ? await loadScope(next) : null;
+        if (snap) {
+            applySettings(snap.settings || null);
+            applyProducts(state, snap.products || {});
+            return {
+                restored: true, keptExisting: false,
+                characters: countOf(snap, 'characters'), nodes: countOf(snap, 'nodes'),
+            };
+        }
+        // 无快照：保留 settings 里现有的一切，只补建快照供下次使用。
+        // 这里绝不调用 applySettings(null) —— 那会把用户的时间线清掉。
+        if (next) {
+            await saveScope(next, {
+                settings: snapshotSettings(),
+                products: snapshotProducts(state),
+                savedAt: Date.now(),
+            });
+        }
+        logKeepExisting(next);
+        return { restored: false, keptExisting: true, characters: 0, nodes: 0 };
     }
 
-    // 2) 载入新小说的分区
+    // —— 用户主动换书 ——
+    // 1) 旧书状态存回它的分区，保证切回去时不丢
+    await saveScope(prev, {
+        settings: snapshotSettings(),
+        products: snapshotProducts(state),
+        savedAt: Date.now(),
+    });
+
+    // 2) 载入新书分区
     const snap = next ? await loadScope(next) : null;
 
-    // 3) 写到当前运行态
+    // 3) 有快照就恢复；确实没有（第一次进入这本）才清空运行态
     if (snap) {
         applySettings(snap.settings || null);
         applyProducts(state, snap.products || {});
-    } else if (coldStart && next) {
-        // 冷启动但该小说还没有分区：保留 settings 里已有的数据（可能是旧版本留下的），
-        // 顺手把它存成分区，下次切换就能正常隔离了。
-        logKeepExisting(next);
-        await saveScope(next, {
-            settings: snapshotSettings(),
-            products: snapshotProducts(state),
-            savedAt: Date.now(),
-        });
     } else {
-        // 真正换到一本没有快照的新书：清空，避免上一本的数据残留
         applySettings(null);
         clearProducts(state);
     }
 
     return {
-        restored: !!snap,
-        keptExisting: !snap && coldStart,
-        characters: snap && snap.settings && Array.isArray(snap.settings.characters) ? snap.settings.characters.length : 0,
-        nodes: snap && snap.settings && snap.settings.timeline && Array.isArray(snap.settings.timeline.nodes) ? snap.settings.timeline.nodes.length : 0,
+        restored: !!snap, keptExisting: false,
+        characters: countOf(snap, 'characters'), nodes: countOf(snap, 'nodes'),
     };
+}
+
+/** 从快照里取角色数 / 篇章数（用于提示信息） */
+function countOf(snap, kind) {
+    const st = snap && snap.settings;
+    if (!st) return 0;
+    if (kind === 'characters') return Array.isArray(st.characters) ? st.characters.length : 0;
+    return st.timeline && Array.isArray(st.timeline.nodes) ? st.timeline.nodes.length : 0;
 }
 
 /** 冷启动无快照时的提示（走日志，不打断流程） */
