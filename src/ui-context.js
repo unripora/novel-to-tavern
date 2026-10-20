@@ -8,6 +8,7 @@
 import { flash } from './util.js';
 import { panelStore, serverMaybeSave, settings } from './store.js';
 import { SCOPED_PRODUCT_KEYS } from './novel-scope.js';
+import { safeName } from './persist.js';
 
 /** 面板级状态 */
 export const state = {
@@ -30,8 +31,12 @@ export const state = {
     logs: {},
 };
 
-/** 需要持久化的产物字段（切 Tab 保留内存、刷新存活于 localforage） */
-const PRODUCT_KEYS = ['cardText', 'cardGroups', 'personaText', 'firstText', 'styleText', 'wbEntries', 'wbPreview', 'wbGroups', 'wbGroupNames'];
+/**
+ * 需要持久化的产物字段（切 Tab 保留内存、刷新存活于 localforage）。
+ * 由 SCOPED_PRODUCT_KEYS 派生，再加一个跨书共享的 personaText：
+ * 避免"两份清单各写各的"再次漂移（之前 styleText/firstText 就是因此漏了按书隔离）。
+ */
+const PRODUCT_KEYS = [...SCOPED_PRODUCT_KEYS, 'personaText'];
 /** 日志缓存持久化：仅在生成期间防抖存一次，避免频繁写入 */
 let _logSaveTimer = null;
 
@@ -42,6 +47,9 @@ let _srvSaveTimer = null;
 export function saveProducts() {
     const data = {};
     for (const k of PRODUCT_KEYS) data[k] = state[k];
+    // 记录下写盘时所属的小说：防抖回调里不能再读 curNovel，
+    // 否则 1.5s 内换了书，会把这本书的产物写到另一本书的路径下。
+    const rec = settings().curNovel || '';
     panelStore.save('products', data).catch(() => { });
     // 同步写当前小说的分区，冷启动按分区恢复时能拿到最新的产物
     syncScopeProducts(data).catch(() => { });
@@ -49,7 +57,8 @@ export function saveProducts() {
     if (_srvSaveTimer) clearTimeout(_srvSaveTimer);
     _srvSaveTimer = setTimeout(() => {
         _srvSaveTimer = null;
-        serverMaybeSave('_state/products.json', JSON.stringify(data, null, 2)).catch(() => { });
+        const rel = rec ? (safeName(rec) + '/_state/products.json') : '_state/products.json';
+        serverMaybeSave(rel, JSON.stringify(data, null, 2)).catch(() => { });
     }, 1500);
 }
 

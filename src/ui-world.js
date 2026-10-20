@@ -14,7 +14,7 @@ import * as scan from './scan.js';
 import * as worldbook from './worldbook.js';
 import * as wbByChapter from './worldbook-by-chapter.js';
 import * as timeline from './timeline.js';
-import { $, state, escapeHtml, downloadText, stopRun, saveProducts } from './ui-context.js';
+import { $, state, escapeHtml, escapeAttr, downloadText, stopRun, saveProducts } from './ui-context.js';
 import * as persistMod from './persist.js';
 import * as stBridge from './st-bridge.js';
 
@@ -220,7 +220,7 @@ async function renderVolList(nodes) {
     (nodes || []).forEach((n) => {
         const isDone = !!done[n.name];
         rows.push(`<label class="ce-volline">
-            <input type="checkbox" class="ce_wb_vol" data-name="${escapeHtml(n.name)}" ${isDone ? '' : 'checked'}>
+            <input type="checkbox" class="ce_wb_vol" data-name="${escapeAttr(n.name)}" ${isDone ? '' : 'checked'}>
             <span>${escapeHtml(n.name)}</span>
             <span class="ce-faint">${isDone ? '[已生成]' : '[未生成]'}</span>
         </label>`);

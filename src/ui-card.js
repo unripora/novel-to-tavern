@@ -5,6 +5,7 @@
 import { flash, logTo, clearLog, stripFence, stripThink } from './util.js';
 import { settings, persist } from './store.js';
 import * as scan from './scan.js';
+import * as novel from './novel.js';
 import * as extras from './extras.js';
 import * as writer from './card-writer.js';
 import { generate } from './generate.js';
@@ -406,12 +407,13 @@ function pickedIdxs() {
 
 /** 导入酒馆（选中的卡；无选中则提示） */
 async function importSelectedCards() {
-    const idxs = pickedIdxs();
-    if (!idxs.length) { flash('ce_cards_msg', '请先点击圆角矩形选中要导入的角色卡', true); return; }
-    flash('ce_cards_msg', `导入 ${idxs.length} 张中…`, false, { persist: true });
+    // 先快照卡片对象：导入过程中若触发生成（会清空 state.cardGroups），
+    // 直接按下标取值会拿到 undefined 而崩溃。
+    const cards = pickedIdxs().map((i) => state.cardGroups[i]).filter(Boolean);
+    if (!cards.length) { flash('ce_cards_msg', '请先点击圆角矩形选中要导入的角色卡', true); return; }
+    flash('ce_cards_msg', `导入 ${cards.length} 张中…`, false, { persist: true });
     let okN = 0;
-    for (const i of idxs) {
-        const c = state.cardGroups[i];
+    for (const c of cards) {
         const card = writer.parseCard(c.text, { name: c.name });
         const res = await writer.writeCharacterToTavern(card, {
             onLog: (m, e) => logTo('ce_gen_log', '[导入] ' + m, e ? 'e' : ''),
@@ -419,19 +421,18 @@ async function importSelectedCards() {
         if (res.ok) okN++;
     }
     logTo('ce_gen_log', '✅ 所有任务已完成', 'g');
-    flash('ce_cards_msg', `导入完成：成功 ${okN}/${idxs.length}` + (okN ? '' : ''));
+    flash('ce_cards_msg', `导入完成：成功 ${okN}/${cards.length}`);
 }
 
 /** 导出 .json（选中的卡） */
 function exportSelectedCards() {
-    const idxs = pickedIdxs();
-    if (!idxs.length) { flash('ce_cards_msg', '请先点击圆角矩形选中要导出的角色卡', true); return; }
-    idxs.forEach((i) => {
-        const c = state.cardGroups[i];
+    const cards = pickedIdxs().map((i) => state.cardGroups[i]).filter(Boolean);
+    if (!cards.length) { flash('ce_cards_msg', '请先点击圆角矩形选中要导出的角色卡', true); return; }
+    cards.forEach((c) => {
         writer.exportCardJson(writer.parseCard(c.text, { name: c.name }));
     });
     logTo('ce_gen_log', '✅ 所有任务已完成', 'g');
-    flash('ce_cards_msg', `已导出 ${idxs.length} 张 .json`);
+    flash('ce_cards_msg', `已导出 ${cards.length} 张 .json`);
 }
 
 /** 对当前预览的卡片续写 */

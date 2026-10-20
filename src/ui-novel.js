@@ -163,7 +163,7 @@ async function importFile(f) {
     try {
         flash('ce_novel_msg', '读取中…');
         $('ce_load_prog').style.display = 'block';
-        const { text, enc, record, scope } = await novel.readNovelFile(f, (pct, label) => {
+        const { text, enc, record, scope, saved, saveError } = await novel.readNovelFile(f, (pct, label) => {
             $('ce_load_bar').style.width = pct + '%';
             const el = $('ce_novel_msg');
             if (el) el.textContent = label || '';
@@ -171,6 +171,10 @@ async function importFile(f) {
         $('ce_novel_text').value = novel.previewOf(text);
         updateNovelStat();
         $('ce_load_prog').style.display = 'none';
+        if (saved === false) {
+            flash('ce_novel_msg', '正文已读入，但保存记录失败：' + (saveError || '存储不可用') + '（刷新后会丢失，请检查酒馆存储）', true);
+            return;
+        }
         flash('ce_novel_msg', '已导入（编码 ' + enc + '），已自动存为记录「' + record + '」' + scopeMessage(scope));
         refreshNovelList(record);
     } catch (e) {

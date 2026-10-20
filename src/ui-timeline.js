@@ -128,8 +128,12 @@ function bindRowEvents(textLen) {
             const n = tl.nodes.find((x) => x.id === id);
             if (!n) return;
             n.name = name.value;
-            n.start = Number(start.value) || 0;
-            n.end = Number(end.value) || textLen;
+            // 不能用 `Number(v) || 默认值`：输入 0 是合法位置，会被静默改成别的值。
+            // 空输入或非法数字才回退到默认。
+            const st = Number(start.value);
+            const en = Number(end.value);
+            n.start = (start.value.trim() !== '' && Number.isFinite(st)) ? st : 0;
+            n.end = (end.value.trim() !== '' && Number.isFinite(en)) ? en : textLen;
             n.summary = summary.value;
             timeline.saveTimeline(tl);
         };

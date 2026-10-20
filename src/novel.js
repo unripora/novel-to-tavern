@@ -117,8 +117,17 @@ export async function readNovelFile(f, onProgress, state) {
     // 导入即自动落盘：用文件名（去扩展名）作为记录名，刷新后可自动恢复
     const recName = (f.name || '').replace(/\.[^.]+$/, '').trim() || ('导入_' + Date.now());
     let scope = null;
-    try { scope = (await saveNovelRecord(recName, state)).scope; } catch (e) { /* 存储不可用时不阻断导入 */ }
-    return { text, enc: dec, record: recName, scope };
+    let saved = false;
+    let saveError = '';
+    try {
+        scope = (await saveNovelRecord(recName, state)).scope;
+        saved = true;
+    } catch (e) {
+        // 不再静默吞掉：正文已读进内存，但没能存成记录时，必须让上层提示用户，
+        // 否则界面会说「已保存」，刷新后却找不到这本小说。
+        saveError = e.message || String(e);
+    }
+    return { text, enc: dec, record: recName, scope, saved, saveError };
 }
 
 /**
@@ -168,9 +177,26 @@ export async function loadNovelRecord(name, state) {
 
 /** 删除记录（若删的是当前记录，清空当前记录名；连带删除该小说的中间产物分区） */
 export async function deleteNovelRecord(name, state) {
+    const isCurrent = getCurrentRecord() === name;
     await novelStore.del(name);
-    if (getCurrentRecord() === name) await setCurrentRecord('', state);
+    // 先删分区，再清当前记录：若顺序反过来，setCurrentRecord 的「换书」分支
+    // 会把这份即将删除的数据重新写回 scope:<name>，导致删掉的书可能"复活"。
     await dropNovelScope(name);
+    if (isCurrent) {
+        settings().curNovel = '';
+        persist();
+        try { (await import('./scan.js')).invalidateCharacters(); } catch (e) { /* 忽略 */ }
+        // 清空运行态（不动分区，分区已删）
+        if (state) {
+            state.cardGroups = [];
+            state.cardText = '';
+            state.cardViewIdx = null;
+            state.wbEntries = [];
+            state.wbPreview = '';
+            state.wbGroups = null;
+            state.wbGroupNames = {};
+        }
+    }
     // 同步删除服务器工作区下的正文（开关关闭 / 插件不可用时内部静默跳过）
     serverMaybeDel(persistMod.wsPath(name, 'novel.txt')).catch(() => { });
 }

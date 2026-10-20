@@ -11,8 +11,17 @@
 
 import { settings, persist, panelStore } from './store.js';
 
-/** 面板产物中需要按小说隔离的字段（与 ui-context 的 PRODUCT_KEYS 对齐） */
-export const SCOPED_PRODUCT_KEYS = ['cardText', 'cardGroups', 'wbEntries', 'wbPreview', 'wbGroups', 'wbGroupNames'];
+/**
+ * 面板产物中需要按小说隔离的字段。
+ * 必须与 ui-context.js 的 PRODUCT_KEYS 保持同源（那边现由此处派生）。
+ * styleText / firstText 也按书隔离：它们是「这本书的文风与开场」，跨书混用会串味。
+ * personaText 属于用户人设，跨书复用，故不在此列。
+ */
+export const SCOPED_PRODUCT_KEYS = [
+    'cardText', 'cardGroups', 'cardViewIdx',
+    'wbEntries', 'wbPreview', 'wbGroups', 'wbGroupNames',
+    'styleText', 'firstText',
+];
 
 /** 分区前缀（避免与已有 key 冲突） */
 const SCOPE = 'scope:';
@@ -45,6 +54,19 @@ function applySettings(snap) {
     persist();
 }
 
+/** 各产物字段的默认值：快照里缺这个键时用它重置，而不是留着上一本书的值 */
+const PRODUCT_DEFAULTS = {
+    cardText: '',
+    cardGroups: () => [],
+    cardViewIdx: null,
+    wbEntries: () => [],
+    wbPreview: '',
+    wbGroups: null,
+    wbGroupNames: () => ({}),
+    styleText: '',
+    firstText: '',
+};
+
 /** 把面板产物从 state 摘出来 */
 function snapshotProducts(state) {
     const out = {};
@@ -52,27 +74,33 @@ function snapshotProducts(state) {
     return out;
 }
 
-/** 把面板产物写回 state */
+/**
+ * 把面板产物写回 state。
+ * 快照里没有的键要显式重置为默认值：否则会保留上一本书的内容
+ * （例如 A 书改过世界书分组名，切到 B 书后 wbGroupNames 仍是 A 的）。
+ */
 function applyProducts(state, snap) {
     for (const k of SCOPED_PRODUCT_KEYS) {
-        if (snap && snap[k] !== undefined) state[k] = snap[k];
+        if (snap && snap[k] !== undefined) {
+            state[k] = snap[k];
+        } else {
+            const def = PRODUCT_DEFAULTS[k];
+            state[k] = (typeof def === 'function') ? def() : def;
+        }
     }
 }
 
 /** 清空面板产物（新小说用） */
 function clearProducts(state) {
-    state.cardText = '';
-    state.cardGroups = [];
-    state.cardViewIdx = null;
-    state.wbEntries = [];
-    state.wbPreview = '';
-    state.wbGroups = null;
-    state.wbGroupNames = {};
+    applyProducts(state, null);
 }
 
-/** 读取某小说的分区快照（不存在则 null） */
+/** 读失败哨兵：区分「没有快照」与「存储读不出来」，后者绝不能当成新书去清空 */
+const LOAD_FAILED = Symbol('scope-load-failed');
+
+/** 读取某小说的分区快照（不存在则 null；读失败返回 LOAD_FAILED） */
 async function loadScope(rec) {
-    try { return await panelStore.load(recKey(rec)); } catch (e) { return null; }
+    try { return await panelStore.load(recKey(rec)); } catch (e) { return LOAD_FAILED; }
 }
 
 /** 写入某小说的分区快照 */
@@ -98,7 +126,7 @@ export async function switchNovelScope({ prev = '', next = '', state }) {
     // —— 冷启动：只恢复，绝不写空 ——
     if (!prev) {
         const snap = next ? await loadScope(next) : null;
-        if (snap) {
+        if (snap && snap !== LOAD_FAILED) {
             applySettings(snap.settings || null);
             applyProducts(state, snap.products || {});
             return {
@@ -106,16 +134,18 @@ export async function switchNovelScope({ prev = '', next = '', state }) {
                 characters: countOf(snap, 'characters'), nodes: countOf(snap, 'nodes'),
             };
         }
-        // 无快照：保留 settings 里现有的一切，只补建快照供下次使用。
+        // 无快照 / 读失败：保留 settings 里现有的一切，只补建快照。
         // 这里绝不调用 applySettings(null) —— 那会把用户的时间线清掉。
-        if (next) {
+        // 读失败时更不能补建，否则会用当前（可能不完整的）状态覆盖真正存在的快照。
+        if (next && snap !== LOAD_FAILED) {
             await saveScope(next, {
                 settings: snapshotSettings(),
                 products: snapshotProducts(state),
                 savedAt: Date.now(),
             });
         }
-        logKeepExisting(next);
+        if (snap === LOAD_FAILED) logLoadFailed(next);
+        else logKeepExisting(next);
         return { restored: false, keptExisting: true, characters: 0, nodes: 0 };
     }
 
@@ -130,17 +160,20 @@ export async function switchNovelScope({ prev = '', next = '', state }) {
     // 2) 载入新书分区
     const snap = next ? await loadScope(next) : null;
 
-    // 3) 有快照就恢复；确实没有（第一次进入这本）才清空运行态
-    if (snap) {
+    // 3) 有快照就恢复；读失败则保留现状（不动用户数据）；确实没有才清空
+    if (snap && snap !== LOAD_FAILED) {
         applySettings(snap.settings || null);
         applyProducts(state, snap.products || {});
+    } else if (snap === LOAD_FAILED) {
+        logLoadFailed(next);
+        return { restored: false, keptExisting: true, characters: 0, nodes: 0 };
     } else {
         applySettings(null);
         clearProducts(state);
     }
 
     return {
-        restored: !!snap, keptExisting: false,
+        restored: !!(snap && snap !== LOAD_FAILED), keptExisting: false,
         characters: countOf(snap, 'characters'), nodes: countOf(snap, 'nodes'),
     };
 }
@@ -158,15 +191,24 @@ function logKeepExisting(rec) {
     try { console.log('[card-extractor] 未找到「' + rec + '」的分区快照，保留现有中间产物并建立快照'); } catch (e) { /* 忽略 */ }
 }
 
+/** 读分区失败时的提示：数据保留原样，不做任何清空 */
+function logLoadFailed(rec) {
+    try { console.warn('[card-extractor] 读取「' + rec + '」的分区快照失败，已保留当前中间产物未做清空'); } catch (e) { /* 忽略 */ }
+}
+
 /** 删除某小说的分区（删除正文记录时调用） */
 export async function dropNovelScope(rec) {
-    if (!rec) return;
-    try { await panelStore.del(recKey(rec)); } catch (e) { /* 忽略 */ }
+    if (!rec) return false;
+    try { await panelStore.del(recKey(rec)); return true; } catch (e) {
+        try { console.warn('[card-extractor] 删除分区失败：' + rec); } catch (e2) { /* 忽略 */ }
+        return false;
+    }
 }
 
 /** 某小说是否已有分区 */
 export async function hasNovelScope(rec) {
-    return !!(await loadScope(rec));
+    const s = await loadScope(rec);
+    return !!s && s !== LOAD_FAILED;
 }
 
 export default { switchNovelScope, dropNovelScope, hasNovelScope, SCOPED_PRODUCT_KEYS };

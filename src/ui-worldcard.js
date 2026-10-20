@@ -181,6 +181,10 @@ function renderCharList() {
     const box = $('ce_wc_charlist');
     if (!box) return;
     const chars = scan.getCharacters();
+    // 清洗选中项：角色被删/合并或换过小说后，旧名字不能留着，
+    // 否则会为已经不存在的角色生成条目。
+    const names = new Set(chars.map((c) => c.name));
+    wc.selected = wc.selected.filter((n) => names.has(n));
     if (!chars.length) { box.innerHTML = '<div class="ce-tip">还没有角色。请先到「角色卡」页扫描 / 添加角色。</div>'; return; }
     box.innerHTML = '';
     chars.forEach((c) => {
