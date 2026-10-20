@@ -16,6 +16,7 @@ import * as worldbook from './worldbook.js';
 import * as persistMod from './persist.js';
 import * as writer from './card-writer.js';
 import * as timeline from './timeline.js';
+import { screenCharacters, verifyCharactersInChapter } from './char-presence.js';
 import { bindPrimaryWorldbook, unbindPrimaryWorldbook, linkExtraWorldbook, popupForm } from './st-bridge.js';
 import { $, state, escapeHtml, escapeAttr } from './ui-context.js';
 
@@ -78,6 +79,19 @@ export function renderWorldCardTab(box) {
                         <option value="overwrite" selected>覆盖（替换同名旧条目）</option>
                     </select>
                 </div>
+                <div class="ce-rowline">
+                    <label>出场判断</label>
+                    <select id="ce_wc_presence" class="text_pole" style="flex:1">
+                        <option value="auto" selected>自动剔除（本卷未出场的不写条目）</option>
+                        <option value="report">仅报告（不过滤，只列名单）</option>
+                        <option value="off">不判断（全部生成）</option>
+                    </select>
+                </div>
+                <p class="ce-faint">
+                    用于「晚出场 / 只在某篇章登场」的角色：选了具体卷后，名字在本卷没出现、
+                    或只被提及（传闻 / 回忆 / 预告）而本人未登场的角色，**不写进本卷条目**，
+                    避免一提到名字就把 TA 的完整档案注入而提前剧透。选「全书」时该判断不生效。
+                </p>
                 <div class="ce-rowline">
                     <button type="button" class="menu_button" id="ce_wc_sel_all">全选角色</button>
                     <button type="button" class="menu_button" id="ce_wc_sel_none">全不选</button>
@@ -186,6 +200,49 @@ function renderCharList() {
     if (cnt) cnt.textContent = String(wc.selected.length);
 }
 
+/**
+ * 出场判断：把「在本卷内没有实际戏份」的角色从本次生成名单里剔掉。
+ *
+ * 两级：
+ *  1. 程序粗筛——名字/别名在本卷正文里 0 次出现 → 直接判定未出场，不花 AI 调用。
+ *  2. AI 复核——粗筛命中的，区分「本人登场」与「仅被提及（传闻/回忆/预告）」。
+ *
+ * @param {string[]} names 本次要生成条目的角色名
+ * @param {{name:string,start:number,end:number}} range 当前选中的卷范围
+ * @param {'auto'|'report'} mode auto=剔除；report=只报告不剔除
+ * @param {AbortSignal} signal
+ * @returns {Promise<string[]>} 过滤后仍需生成的角色名
+ */
+async function filterByPresence(names, range, mode, signal) {
+    const text = novel.getNovel().slice(range.start, range.end);
+    const chars = names.map((n) => {
+        const c = scan.getCharacters().find((x) => x.name === n);
+        return { name: n, aliases: (c && c.aliases) || [] };
+    });
+    const { absent, candidates } = screenCharacters(text, chars);
+    if (absent.length) {
+        logTo('ce_wc_log', `本卷未出现（${absent.length}）：` + absent.map((c) => c.name).join('、'), 'g');
+    }
+    let presentNames = candidates.map((x) => x.char.name);
+    if (candidates.length && !signal.aborted) {
+        flash('ce_wc_msg', '判断出场情况…', false, { persist: true });
+        const v = await verifyCharactersInChapter({
+            text, chapterName: range.name, candidates, signal, logEl: 'ce_wc_log',
+        });
+        presentNames = v.present.map((c) => c.name);
+        if (v.mentionedOnly.length) {
+            logTo('ce_wc_log', `仅被提及、本人未登场（${v.mentionedOnly.length}）：` + v.mentionedOnly.map((c) => c.name).join('、'), 'g');
+        }
+    }
+    const removed = names.filter((n) => !presentNames.includes(n));
+    if (mode === 'report') {
+        logTo('ce_wc_log', `仅报告模式：本卷应剔除 ${removed.length} 个角色（本次不过滤，仍全部生成）`, 'e');
+        return names;
+    }
+    if (removed.length) logTo('ce_wc_log', `已剔除本卷未出场的角色 ${removed.length} 个，不写进条目。`, 'g');
+    return presentNames;
+}
+
 async function runGenCharEntries() {
     if (!wc.selected.length) { flash('ce_wc_msg', '请先选择角色', true); return; }
     if (wc.running) { if (wc.controller) { try { wc.controller.abort(); } catch (e) { /* 忽略 */ } } wc.running = false; return; }
@@ -201,15 +258,32 @@ async function runGenCharEntries() {
     const nsfw = !!$('ce_wc_nsfw')?.checked;
     const target = $('ce_wc_target')?.value || '';
     const rangeVal = $('ce_wc_range')?.value || '';
+    const presence = $('ce_wc_presence')?.value || 'auto';
     try {
         // 原文范围：由「原文范围」下拉决定（手动指定，独立于目标世界书；不选=全书抽样）
         wc.lastRange = resolveRangeByNodeId(rangeVal);
         if (wc.lastRange) logTo('ce_wc_log', `原文范围：卷「${wc.lastRange.name}」${wc.lastRange.start}~${wc.lastRange.end}，将只在该段正文内检索角色。`, 'g');
         else logTo('ce_wc_log', '原文范围：全书（未指定卷，按全书抽样）。', 'g');
         if (detail === 'detail') logTo('ce_wc_log', '条目详略：详细档案（按单人卡模板逐字段填写，条目较长）。', 'g');
+
+        // 出场判断：只在指定了具体卷、且开启了过滤时生效
+        // 目的：晚出场 / 只在特定篇章登场的角色，不要写进本卷的条目里，否则一提到名字就剧透
+        let names = wc.selected.slice();
+        if (presence !== 'off' && wc.lastRange) {
+            names = await filterByPresence(names, wc.lastRange, presence, signal);
+            if (signal.aborted) return;
+            if (!names.length) {
+                logTo('ce_wc_log', '本卷所选角色均未出场，已跳过生成。', 'e');
+                flash('ce_wc_msg', '所选角色在本卷均未出场');
+                return;
+            }
+        } else if (presence !== 'off' && !wc.lastRange) {
+            logTo('ce_wc_log', '出场判断已跳过：原文范围为「全书」，无法判断登场卷。选具体卷后再生效。', 'e');
+        }
+
         flash('ce_wc_msg', '生成角色条目…', false, { persist: true });
         const entries = await worldbook.genCharEntries({
-            names: wc.selected.slice(),
+            names,
             relatedMode: related,
             detail,
             nsfw, signal,
