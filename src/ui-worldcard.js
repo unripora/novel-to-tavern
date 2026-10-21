@@ -300,10 +300,18 @@ async function runGenCharEntries() {
         if (related === 'heavy' && !signal.aborted) {
             flash('ce_wc_msg', '关系抽取中…', false, { persist: true });
             const graph = await worldbook.relExtractCore({ signal });
-            try { await persistMod.saveRelations(currentRec(), graph); } catch (e) { /* 忽略 */ }
-            logTo('ce_wc_log', '关系图谱已落盘：实体 ' + graph.entities.length + '、关系 ' + graph.relations.length, 'g');
+            if (graph.error) {
+                // 失败要明确报错，不能打印「实体 0、关系 0」冒充成功
+                logTo('ce_wc_log', '❌ 关系图谱失败：' + graph.error, 'e');
+                flash('ce_wc_msg', '关系图谱失败：' + graph.error, true);
+            } else if (graph.aborted) {
+                logTo('ce_wc_log', '关系抽取已停止', 'e');
+            } else {
+                try { await persistMod.saveRelations(currentRec(), graph); } catch (e) { /* 忽略 */ }
+                logTo('ce_wc_log', '关系图谱已落盘：实体 ' + graph.entities.length + '、关系 ' + graph.relations.length, 'g');
+            }
         }
-        flash('ce_wc_msg', '已生成 ' + entries.length + ' 条');
+        flash('ce_wc_msg', '已生成 ' + entries.length + ' 条角色条目');
     } catch (e) {
         logTo('ce_wc_log', '生成失败：' + e.message, 'e');
         flash('ce_wc_msg', '生成失败', true);

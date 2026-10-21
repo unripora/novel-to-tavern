@@ -10,7 +10,7 @@
 import { ctx } from './st-bridge.js';
 import { getNovel } from './novel.js';
 import { settings } from './store.js';
-import { sampleForStyle, getCharacters, collectContext } from './scan.js';
+import { sampleForStyle, sampleText, getCharacters, collectContext } from './scan.js';
 import { generate, isAbort } from './generate.js';
 import { stripFence, stripThink, extractJsonArray, logTo, uniq, normalizeRange } from './util.js';
 
@@ -279,7 +279,7 @@ export async function wbMinorCore({ signal, onText, mode = 'each', cap = 20, max
     const characters = getCharacters();
     if (!characters.length) { logTo('ce_wb_log', '配角：请先扫描/添加角色，跳过', 'e'); return []; }
     const maxT = Math.max(4000, Number(maxTokens) || 4000);
-    const sample = sampleForStyle(getNovel().trim());
+    const sample = sampleText(getNovel().trim());
     const capN = Math.max(1, Number(cap) || 20);
     const list = characters.map((c) => '· ' + c.name + (c.aliases && c.aliases.length ? ('（' + c.aliases.join('、') + '）') : '') + (c.role ? ('：' + c.role) : '')).join('\n');
     const stream = !!settings().useStream;
@@ -382,7 +382,7 @@ export async function genCharEntries({
         logTo('ce_wc_log', `角色条目：按原文范围（${rg.start}~${rg.end}）取原文 ${sample.length} 字`, 'g');
     }
     if (!sample) {
-        sample = sampleForStyle(getNovel().trim());
+        sample = sampleText(getNovel().trim());
         if (!rg) logTo('ce_wc_log', wantDetail ? '角色条目：未限定范围，详细模式改用各角色的相关段落' : '角色条目：未限定范围，改用全书抽样', 'g');
     }
     const wantRelated = relatedMode === 'light' || relatedMode === 'heavy';
@@ -489,8 +489,13 @@ function extractJsonObject(s) {
  * @returns {Promise<{entities:Array, relations:Array}>}
  */
 export async function relExtractCore({ signal, maxTokens } = {}) {
-    const sample = sampleForStyle(getNovel().trim());
-    if (!sample) { logTo('ce_wc_log', '关系抽取：请先导入小说', 'e'); return { entities: [], relations: [] }; }
+    const text = getNovel().trim();
+    // 抽样：用 sampleText（接受文本），不能用 sampleForStyle（它固定读全文，首参是数值）
+    const sample = sampleText(text);
+    if (!sample) {
+        logTo('ce_wc_log', '关系抽取：请先导入小说', 'e');
+        return { entities: [], relations: [], error: '请先导入小说' };
+    }
     const prompt =
         '请从下面的小说节选中，抽取「实体」与它们之间的「关系」，构建一张关系图谱。\n' +
         '实体类型：角色 / 事件 / 地点 / 势力。\n' +
@@ -501,24 +506,36 @@ export async function relExtractCore({ signal, maxTokens } = {}) {
         '  "entities": [{"id":"e1","type":"角色","name":"桐人"}],\n' +
         '  "relations": [{"from":"e1","rel":"参与","to":"e2"}]\n' +
         '}\n' +
-        'id 自行编号（同一实体只出现一次）；relations 的 from/to 必须是 entities 里出现过的 id。\n\n' +
+        'id 自行编号（同一实体只出现一次）；relations 的 from/to 必须是 entities 里出现过的 id。\n' +
+        '必须只输出上述 JSON，不要询问、不要要求补充材料——原文就在下面。\n\n' +
         '=== 小说节选 ===\n' + sample;
+    logTo('ce_wc_log', '关系抽取：提交原文 ' + sample.length.toLocaleString() + ' 字');
     let raw = '';
     try {
         raw = await generate(userMsgs(prompt), {
             signal, useStream: !!settings().useStream,
-            maxTokens: Math.max(4000, Number(maxTokens) || 4000),
+            // 关系图谱输出量大（数十实体 + 关系），4k 远远不够，会截断后解析失败
+            maxTokens: Number(maxTokens) > 0 ? Number(maxTokens) : Math.max(16000, Number(settings().maxTokens) || 16000),
             maxCont: settings().autoCont ? 3 : 0, logEl: 'ce_wc_log', label: '关系抽取',
         });
     } catch (err) {
-        if (isAbort(err, signal)) return { entities: [], relations: [] };
+        if (isAbort(err, signal)) return { entities: [], relations: [], aborted: true };
         logTo('ce_wc_log', '关系抽取失败：' + err.message, 'e');
-        return { entities: [], relations: [] };
+        return { entities: [], relations: [], error: err.message };
     }
     const obj = extractJsonObject(raw);
-    if (!obj || !Array.isArray(obj.entities)) { logTo('ce_wc_log', '关系抽取：解析失败', 'e'); return { entities: [], relations: [] }; }
+    if (!obj || !Array.isArray(obj.entities)) {
+        // 不再静默返回空：把 AI 实际返回的内容摘要打到日志，能直接看出是"没给原文"还是"格式跑偏"
+        const head = stripThink(String(raw || '')).trim().slice(0, 120).replace(/\s+/g, ' ');
+        logTo('ce_wc_log', '关系抽取：解析失败（AI 未按要求返回 JSON）。返回开头：' + (head || '（空）'), 'e');
+        return { entities: [], relations: [], error: 'AI 未返回合法 JSON，请重试或检查模型输出能力' };
+    }
     const entities = obj.entities.filter((e) => e && e.id && e.name).map((e) => ({ id: String(e.id), type: String(e.type || '角色'), name: String(e.name).trim() }));
     const rels = Array.isArray(obj.relations) ? obj.relations.filter((r) => r && r.from && r.to) : [];
+    if (!entities.length) {
+        logTo('ce_wc_log', '关系抽取：AI 返回的 entities 为空', 'e');
+        return { entities: [], relations: [], error: 'AI 未抽到任何实体' };
+    }
     logTo('ce_wc_log', '关系抽取完成：实体 ' + entities.length + '、关系 ' + rels.length, 'g');
     return { entities, relations: rels };
 }
@@ -598,7 +615,7 @@ export async function wbPlotCore({ signal, entries = [], state = null, onProgres
 export async function wbConstantEntry({ signal, onText, kind = 'chars', maxTokens } = {}) {
     const characters = getCharacters();
     const maxT = Math.max(6000, Number(maxTokens) || 4000);
-    const sample = sampleForStyle(getNovel().trim());
+    const sample = sampleText(getNovel().trim());
     const stream = !!settings().useStream;
     const cont = settings().autoCont ? 5 : 0;
     let prompt, title;

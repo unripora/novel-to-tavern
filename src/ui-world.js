@@ -576,11 +576,15 @@ async function runWorldbook() {
     if ($('ce_wb_t_extract').checked) state.wbEntries = [];
 
     try {
+        const failures = [];
         for (const [label, fn] of tasks) {
             if (state.controller.signal.aborted) break;
             logTo('ce_wb_log', '▶ ' + label);
             flash('ce_wb_msg', label + '…', false, { persist: true });
             const res = await fn();
+            // 关系图谱这类「返回 { entities, relations, error }」的任务失败时不产生条目，
+            // 必须单独收集，否则末尾的「所有任务已完成」会把失败掩盖掉。
+            if (res && res.error) failures.push(label + '（' + res.error + '）');
             // 统一归一化：{entries,state} / 数组 / 单条目 三种返回形态
             const list = normalizeWbResult(res);
             list.forEach((e) => mergeWbEntry(e));
@@ -591,6 +595,9 @@ async function runWorldbook() {
         if (state.controller.signal.aborted) {
             logTo('ce_wb_log', '⏹ 已停止', 'e');
             flash('ce_wb_msg', '已停止');
+        } else if (failures.length) {
+            logTo('ce_wb_log', '⚠ 部分任务失败：' + failures.join('；'), 'e');
+            flash('ce_wb_msg', '部分失败：' + failures.join('；'), true);
         } else {
             logTo('ce_wb_log', '✅ 所有任务已完成', 'g');
             flash('ce_wb_msg', `完成，共 ${state.wbEntries.length} 条`);
@@ -624,6 +631,12 @@ async function runWithResume(kind, rec, run) {
 /** 重档：关系抽取并落盘到工作区 _state/relations.json */
 async function runRelationExtract(rec) {
     const graph = await worldbook.relExtractCore({ signal: state.controller ? state.controller.signal : undefined });
+    if (graph.error) {
+        logTo('ce_wb_log', '❌ 关系图谱失败：' + graph.error, 'e');
+        flash('ce_wb_msg', '关系图谱失败：' + graph.error, true);
+        return graph;
+    }
+    if (graph.aborted) { logTo('ce_wb_log', '关系抽取已停止', 'e'); return graph; }
     try {
         await persistMod.saveRelations(rec, graph);
         flash('ce_wb_msg', '关系图谱已落盘（实体 ' + graph.entities.length + '、关系 ' + graph.relations.length + '）');

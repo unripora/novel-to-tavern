@@ -106,11 +106,36 @@ export function sampleForStyle(perChunk = 8000, slices = 6, cap = 52000) {
 
 /** 小说抽样（供世界书等使用） */
 export function novelSampleOrEmpty() {
-    const t = getNovel().trim();
-    return t ? sampleForStyle(t) : '';
+    return getNovel().trim() ? sampleForStyle() : '';
+}
+
+/**
+ * 对任意文本抽样（头/等距/尾），避免把整本书塞进提示词。
+ *
+ * 与 sampleForStyle 的区别：那个固定读当前小说全文，本函数接受要抽样的文本。
+ * 之前多处把「正文」错传给 sampleForStyle 的第一个参数（那是 perChunk 数字），
+ * 语义完全错位，故单独提供本函数供业务层调用。
+ *
+ * @param {string} text 要抽样的文本
+ * @param {number} [cap] 总字符上限
+ * @param {number} [slices] 采样段数
+ * @returns {string}
+ */
+export function sampleText(text, cap = 52000, slices = 6) {
+    const t = String(text == null ? '' : text);
+    if (!t) return '';
+    if (t.length <= cap) return t;
+    const perChunk = Math.max(1000, Math.floor(cap / slices));
+    const step = Math.floor(t.length / slices);
+    const out = [];
+    for (let i = 0; i < slices; i++) {
+        const start = Math.floor(i * step);
+        out.push(t.slice(start, start + perChunk));
+    }
+    return out.join('\n\n…\n\n').slice(0, cap);
 }
 
 export default {
     getCharacters, setCharacters, clearCharacters, invalidateCharacters, charNames,
-    collectContext, sampleForStyle, novelSampleOrEmpty,
+    collectContext, sampleForStyle, novelSampleOrEmpty, sampleText,
 };
