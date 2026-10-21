@@ -29,8 +29,57 @@ const SCOPE = 'scope:';
 /** 记录名兜底：没有记录名时用固定名，避免写到 undefined 分区 */
 const recKey = (rec) => SCOPE + (String(rec || '').trim() || '_unsaved');
 
+/**
+ * 只把「时间线」同步写回当前小说的分区快照。
+ *
+ * 背景：时间线（含 locked）的唯一写入口是 saveTimeline()，它只写 settings。
+ * 而刷新恢复时 switchNovelScope 是「分区快照优先」，快照里存的却是生成时间线之前的
+ * 旧值 —— 于是刷新一次就把刚划分/锁定的时间线回退掉。
+ * 这里在每次保存时间线时顺手更新分区，保证两边永远同源。
+ *
+ * @param {string} rec 记录名（空则按当前 settings.curNovel）
+ * @param {object} tl  时间线对象 { nodes, locked }
+ */
+export async function syncScopeTimeline(tl, rec) {
+    const name = String(rec || settings().curNovel || '').trim();
+    if (!name || !tl) return false;
+    try {
+        const key = recKey(name);
+        const snap = (await panelStore.load(key)) || {};
+        snap.settings = { ...(snap.settings || {}), timeline: tl };
+        snap.savedAt = Date.now();
+        await panelStore.save(key, snap);
+        return true;
+    } catch (e) { return false; }
+}
+
+/**
+ * 冷启动时在两份时间线里取「不被旧数据覆盖」的那份。
+ *
+ * 规则（按优先级）：
+ *   ① settings 里有节点、快照里为空 → 用 settings（快照是划分之前的旧值）；
+ *   ② 快照里有节点、settings 里为空 → 用快照（例如换了设备/清过设置）；
+ *   ③ 两边都有节点 → 取节点更多的；节点数相同取已锁定的；仍相同取 settings
+ *      （settings 是本机最新一次写入，同数量时更可能是当前版本）。
+ * 都不存在时返回 { nodes: [] }。
+ *
+ * @param {object} a settings 里的时间线（本机最新）
+ * @param {object} b 分区快照里的时间线
+ * @returns {object} 选中的时间线
+ */
+function betterTimeline(a, b) {
+    const na = (a && Array.isArray(a.nodes)) ? a.nodes.length : 0;
+    const nb = (b && Array.isArray(b.nodes)) ? b.nodes.length : 0;
+    if (!na && !nb) return { nodes: [] };
+    if (!nb) return a;
+    if (!na) return b;
+    if (na !== nb) return na > nb ? a : b;
+    if (!!(a && a.locked) !== !!(b && b.locked)) return (a && a.locked) ? a : b;
+    return a;
+}
+
 /** 从 settings 里摘出「属于当前小说」的配置字段（单值，换书必须搬走） */
-function snapshotSettings() {
+export function snapshotSettings() {
     const s = settings();
     return {
         characters: Array.isArray(s.characters) ? s.characters : [],
@@ -127,11 +176,24 @@ export async function switchNovelScope({ prev = '', next = '', state }) {
     if (!prev) {
         const snap = next ? await loadScope(next) : null;
         if (snap && snap !== LOAD_FAILED) {
-            applySettings(snap.settings || null);
+            // 时间线单独比对：settings 里的那份可能是刚划分/锁定的新版本，
+            // 而快照里还是旧版本。取「节点更多 / 更完整」的那份，绝不无脑覆盖。
+            const st = snap.settings || {};
+            const picked = betterTimeline(settings().timeline, st.timeline);
+            applySettings({ ...st, timeline: picked });
             applyProducts(state, snap.products || {});
+            // 把选中的版本回写：快照旧、settings 新时，顺手修正快照，避免下次再回退
+            if (picked !== st.timeline) {
+                await saveScope(next, {
+                    settings: { ...st, timeline: picked },
+                    products: snap.products || {},
+                    savedAt: Date.now(),
+                });
+            }
             return {
                 restored: true, keptExisting: false,
-                characters: countOf(snap, 'characters'), nodes: countOf(snap, 'nodes'),
+                characters: countOf(snap, 'characters'),
+                nodes: Array.isArray(picked.nodes) ? picked.nodes.length : 0,
             };
         }
         // 无快照 / 读失败：保留 settings 里现有的一切，只补建快照。

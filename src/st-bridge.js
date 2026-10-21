@@ -93,39 +93,48 @@ export async function aiRaw(prompt, opts = {}) {
 
     // 临时覆盖酒馆「响应长度」，绕过酒馆滑块限制（生成后自动还原）
     return withLengthOverride(opts.maxTokens, async () => {
-        // 消息数组 → 文本（供位置参数/最简对象回退用；部分酒馆版本不认位置参数传数组）
-        const asText = Array.isArray(prompt) ? messagesToText(prompt) : prompt;
-        // —— 方案 A：对象形式（可带 max_tokens）——
-        const objArgs = { prompt };
-        if (opts.onDelta) objArgs.onDelta = opts.onDelta;
-        if (opts.maxTokens != null) objArgs.max_tokens = opts.maxTokens;
+        let out = '';
         try {
-            const out = await c.generateRaw(objArgs);
-            diag(opts, 'A 对象形式成功', objArgs.max_tokens, out);
-            return extractText(out);
+            // 只用对象形式：位置参数已废弃（酒馆会打 warning，且 onDelta 不生效导致流式退回非流式）
+            out = await c.generateRaw(buildRawArgs(prompt, opts));
         } catch (eA) {
-            diag(opts, 'A 对象形式失败', objArgs.max_tokens, eA);
-            // 对象形式失败，继续尝试其它签名（不要把致命错误吞掉：最后会重抛）
-            // —— 方案 B：位置参数形式（原生酒馆）——
-            try {
-                const out = await c.generateRaw(asText);
-                diag(opts, 'B 位置参数成功', '(无 max_tokens)', out);
-                return extractText(out);
-            } catch (eB) {
-                diag(opts, 'B 位置参数失败', '', eB);
-                // —— 方案 C：回退到最简对象形式（不带 max_tokens / onDelta）——
-                try {
-                    const out = await c.generateRaw({ prompt: asText });
-                    diag(opts, 'C 最简对象成功', '(无 max_tokens)', out);
-                    return extractText(out);
-                } catch (eC) {
-                    diag(opts, 'C 最简对象失败', '', eC);
-                    // 三种都失败：抛出首个错误，便于定位
-                    throw eA;
-                }
-            }
+            const msg = eA && eA.message ? eA.message : String(eA);
+            // 只对「参数格式不被识别」这类错误降级重试；其它（中止、网络、模型报错）直接抛，
+            // 否则一次失败会被重复请求两遍，既慢又浪费额度。
+            if (!isArgShapeError(msg)) throw eA;
+            diag(opts, '对象形式参数不被识别，改用最简对象重试', '', eA);
+            out = await c.generateRaw({ prompt: toRawText(prompt) });
         }
+        diag(opts, '对象形式成功', opts.maxTokens, out);
+        return extractText(out);
     });
+}
+
+/** 组装 generateRaw 的对象参数（不同酒馆版本认的键不完全一致，多写几个无害） */
+function buildRawArgs(prompt, opts) {
+    const args = { prompt: toRawText(prompt) };
+    if (opts.maxTokens != null) args.max_tokens = opts.maxTokens;
+    if (typeof opts.onDelta === 'function') {
+        // 新版酒馆用 onDelta，旧版用 streamingOnProgress 回调
+        args.onDelta = opts.onDelta;
+        args.streamingOnProgress = opts.onDelta;
+    }
+    return args;
+}
+
+/** 提示词统一转成字符串（纯文本在酒馆各版本下最稳，消息数组只对 Chat Completion 有效） */
+function toRawText(prompt) {
+    return Array.isArray(prompt) ? messagesToText(prompt) : String(prompt == null ? '' : prompt);
+}
+
+/**
+ * 是否为「参数形态不被识别」类错误（仅这类错误值得降级重试）。
+ * 注意不要匹配中止错误（AbortError）——那必须原样抛出，否则"停止"失效。
+ */
+function isArgShapeError(msg) {
+    const m = String(msg || '');
+    if (/abort/i.test(m)) return false;
+    return /prompt|argument|param|invalid|missing|undefined is not|not a function|unexpected/i.test(m);
 }
 
 /** 把 Chat 消息数组拼成纯文本（兼容位置参数/最简对象回退） */

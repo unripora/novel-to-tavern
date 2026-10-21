@@ -6,6 +6,7 @@
  */
 
 import { settings, persist } from './store.js';
+import { syncScopeTimeline } from './novel-scope.js';
 
 function makeId() {
     return 'tn_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -22,10 +23,19 @@ export function getTimeline() {
     return s.timeline;
 }
 
-/** 保存时间线 */
+/**
+ * 保存时间线。
+ *
+ * 必须同时写两处，缺一不可：
+ *   ① settings.timeline —— 随酒馆设置落盘，是冷启动时的候选来源之一；
+ *   ② 当前小说的分区快照 scope:<记录名> —— 刷新恢复时以它为准。
+ * 只写 ① 会导致「刷新后时间线回退到旧版本」（快照里还是划分之前的值）。
+ */
 export function saveTimeline(tl) {
     settings().timeline = tl;
     persist();
+    // 分区写入是异步的，失败不阻断主流程（下次保存会再试）
+    syncScopeTimeline(tl).catch(() => { });
 }
 
 /** 清空时间线 */

@@ -748,10 +748,17 @@ async function runGenerateEnsemble() {
     const nsfw = $('ce_nsfw').checked;
     const fullCtx = $('ce_full_ctx').checked;
 
-    // cctx：各角色各自相关段落，拼接（过长由 collectContext 内部按上限裁剪）
+    // cctx：各角色各自相关段落，按「角色数」平均分配上下文预算。
+    // 不能无脑拼接：collectContext 的单人上限是按 ctxCap 算的，选 6 个角色就会得到 6 倍文本，
+    // 直接挤爆上下文 —— 表现为生成很慢、内容为空或严重串味（多人卡失败的主因之一）。
+    const perCharCap = Math.max(6000, Math.floor(settings().ctxCap / Math.max(1, names.length)));
     const cctx = names
-        .map((nm) => scan.collectContext(nm, [], fullCtx))
+        .map((nm) => {
+            const seg = scan.collectContext(nm, [], fullCtx);
+            return seg.length > perCharCap ? seg.slice(0, perCharCap) : seg;
+        })
         .join('\n\n========== 以上为一位角色的相关片段，以下为另一位 ==========\n\n');
+    logTo('ce_gen_log', '角色 ' + names.length + ' 个，每人上下文上限约 ' + perCharCap.toLocaleString() + ' 字');
 
     let raw = '';
     try {
